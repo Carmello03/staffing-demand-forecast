@@ -29,20 +29,21 @@ from training_helper import (
     build_target_cols,
     filter_issue_window,
     fill_missing_values,
+    filter_issue_ranges,
     make_eval_frame_from_open_predictions,
     compute_micro,
     compute_macro,
 )
 
-from pycaret.regression import setup, compare_models, predict_model, save_model
+from pycaret.regression import setup, compare_models, predict_model, save_model, finalize_model
 
 
-DATA_PATH = "data/processed/panel_train_clean.csv"
-HOLDOUT_PATH = "data/splits/holdout_stores.csv"
-SPLITS_PATH = "data/splits/time_splits_rolling.json"
+DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
+HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
+SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
 
-OUT_RESULTS_DIR = "experiments/model_selection/results"
-OUT_ARTIFACTS_DIR = "experiments/model_selection/artifacts"
+OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
+OUT_ARTIFACTS_DIR = "evaluation/experiments/model_selection/artifacts"
 os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
 os.makedirs(OUT_ARTIFACTS_DIR, exist_ok=True)
 
@@ -51,13 +52,34 @@ TARGET = "Customers"
 SEED = 42
 
 TIME_BUDGET_PER_RUN: int = 5
-
+TUNE_DAYS: int = 42
+GAP_DAYS: int = 28
 
 def clean_categoricals(df: pd.DataFrame, cat_cols: List[str]) -> pd.DataFrame:
     df = df.copy()
     for c in cat_cols:
         df[c] = df[c].astype(str).str.replace(r"[^A-Za-z0-9]+", "_", regex=True)
     return df
+
+def split_train_tune_by_time(d_train_all: pd.DataFrame, tune_days: int, gap_days: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    max_date = d_train_all["Date"].max()
+    tune_end = max_date
+    tune_start = tune_end - pd.Timedelta(days=tune_days - 1)
+
+    inner_train_end = tune_start - pd.Timedelta(days=gap_days + 1)
+
+    d_tune = d_train_all[(d_train_all["Date"] >= tune_start) & (d_train_all["Date"] <= tune_end)].copy()
+    d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
+
+    if d_inner.empty:
+        inner_train_end = tune_start - pd.Timedelta(days=1)
+        d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
+
+    if d_tune.empty:
+        d_tune = d_train_all.copy()
+
+    return d_inner, d_tune
+
 
 
 def train_and_evaluate_fold(
@@ -70,12 +92,16 @@ def train_and_evaluate_fold(
 ) -> List[Dict[str, Any]]:
     fold_idx = fold_info.get("fold", "")
 
-    train_start = pd.to_datetime(fold_info["train"]["start"])
-    train_end = pd.to_datetime(fold_info["train"]["end"])
     val_start = pd.to_datetime(fold_info["val"]["start"])
     val_end = pd.to_datetime(fold_info["val"]["end"])
 
-    d_train = filter_issue_window(d, train_start, train_end)
+    if "train_ranges" in fold_info:
+        d_train = filter_issue_ranges(d, fold_info["train_ranges"])
+    else:
+        train_start = pd.to_datetime(fold_info["train"]["start"])
+        train_end = pd.to_datetime(fold_info["train"]["end"])
+        d_train = filter_issue_window(d, train_start, train_end)
+
     d_val = filter_issue_window(d, val_start, val_end)
 
     needed_cols = ["Date"] + num_cols + cat_cols + ["y", "open_future"]
@@ -88,23 +114,37 @@ def train_and_evaluate_fold(
     d_train = clean_categoricals(d_train, cat_cols)
     d_val = clean_categoricals(d_val, cat_cols)
 
-    d_train_open = d_train[d_train["open_future"] == 1].copy()
+    d_inner, d_tune = split_train_tune_by_time(d_train, TUNE_DAYS, GAP_DAYS)
+
+    d_train_open = d_inner[d_inner["open_future"] == 1].copy()
+    d_tune_open = d_tune[d_tune["open_future"] == 1].copy()
     d_val_open = d_val[d_val["open_future"] == 1].copy()
 
     feature_cols = num_cols + cat_cols
 
-    train_df = d_train_open[feature_cols + ["y"]].copy()
-    train_df["y_log"] = np.log1p(train_df["y"].to_numpy(dtype=float))
-    train_df = train_df.drop(columns=["y"])
+    if (len(d_train_open) > 0) and (len(d_tune_open) > 0):
+        inner_df = d_train_open[["Date"] + feature_cols + ["y"]].copy()
+        tune_df = d_tune_open[["Date"] + feature_cols + ["y"]].copy()
+        df_all = pd.concat([inner_df, tune_df], axis=0, ignore_index=True).sort_values("Date").reset_index(drop=True)
+        train_size = float(len(inner_df) / len(df_all)) if len(df_all) else 0.8
+        train_size = max(0.5, min(0.95, train_size))
+    else:
+        df_all = d_train_open[["Date"] + feature_cols + ["y"]].copy().sort_values("Date").reset_index(drop=True)
+        train_size = 0.8
+
+    df_all["y_log"] = np.log1p(df_all["y"].to_numpy(dtype=float))
+    df_all = df_all.drop(columns=["y", "Date"])
 
     t0 = time.time()
     setup(
-        data=train_df,
+        data=df_all,
         target="y_log",
         session_id=SEED,
         html=False,
         verbose=False,
         n_jobs=-1,
+        data_split_shuffle=False,
+        train_size=train_size,
     )
 
     best = compare_models(
@@ -116,6 +156,7 @@ def train_and_evaluate_fold(
         errors="ignore",
         verbose=False,
     )
+    best = finalize_model(best)
     train_time = float(time.time() - t0)
 
     if len(d_val_open) > 0:
@@ -188,32 +229,47 @@ def train_and_evaluate_final(
     d_train_g = clean_categoricals(d_train_g, cat_cols)
     d_test = clean_categoricals(d_test, cat_cols)
 
-    d_train_open = d_train_g[d_train_g["open_future"] == 1].copy()
+    d_inner, d_tune = split_train_tune_by_time(d_train_g, TUNE_DAYS, GAP_DAYS)
+
+    d_train_open = d_inner[d_inner["open_future"] == 1].copy()
+    d_tune_open = d_tune[d_tune["open_future"] == 1].copy()
     feature_cols = num_cols + cat_cols
 
-    train_df = d_train_open[feature_cols + ["y"]].copy()
-    train_df["y_log"] = np.log1p(train_df["y"].to_numpy(dtype=float))
-    train_df = train_df.drop(columns=["y"])
+    if (len(d_train_open) > 0) and (len(d_tune_open) > 0):
+        inner_df = d_train_open[["Date"] + feature_cols + ["y"]].copy()
+        tune_df = d_tune_open[["Date"] + feature_cols + ["y"]].copy()
+        df_all = pd.concat([inner_df, tune_df], axis=0, ignore_index=True).sort_values("Date").reset_index(drop=True)
+        train_size = float(len(inner_df) / len(df_all)) if len(df_all) else 0.8
+        train_size = max(0.5, min(0.95, train_size))
+    else:
+        df_all = d_train_open[["Date"] + feature_cols + ["y"]].copy().sort_values("Date").reset_index(drop=True)
+        train_size = 0.8
+
+    df_all["y_log"] = np.log1p(df_all["y"].to_numpy(dtype=float))
+    df_all = df_all.drop(columns=["y", "Date"])
 
     t0 = time.time()
     setup(
-        data=train_df,
+        data=df_all,
         target="y_log",
         session_id=SEED,
         html=False,
         verbose=False,
         n_jobs=-1,
+        data_split_shuffle=False,
+        train_size=train_size,
     )
 
     best = compare_models(
         sort="MAE",
         n_select=1,
-        fold=2,
+        cross_validation=False,
         budget_time=time_budget,
         turbo=True,
         errors="ignore",
         verbose=False,
     )
+    best = finalize_model(best)
     train_time = float(time.time() - t0)
 
     model_base = os.path.join(OUT_ARTIFACTS_DIR, f"pycaret_h{h}")
@@ -272,6 +328,9 @@ def main() -> None:
     holdout = pd.read_csv(HOLDOUT_PATH)
     with open(SPLITS_PATH, "r", encoding="utf-8") as f:
         splits = json.load(f)
+
+    global GAP_DAYS
+    GAP_DAYS = int(splits.get('meta', {}).get('GAP_DAYS', GAP_DAYS))
 
     holdout_stores = set(holdout["Store"].tolist())
     dev = df[~df["Store"].isin(holdout_stores)].copy()

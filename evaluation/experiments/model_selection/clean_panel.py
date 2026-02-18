@@ -2,8 +2,8 @@ import os
 import pandas as pd
 
 
-IN_PATH = "data/processed/panel_train.csv"  # Input file
-OUT_PATH = "data/processed/panel_train_clean.csv"  # Output file
+IN_PATH = "evaluation/data/processed/panel_train.csv"  # Input file
+OUT_PATH = "evaluation/data/processed/panel_train_clean.csv"  # Output file
 
 
 df = pd.read_csv(IN_PATH, parse_dates=["Date"], dtype={"StateHoliday": "string"})

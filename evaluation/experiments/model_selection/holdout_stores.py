@@ -1,8 +1,8 @@
 import os
 import pandas as pd
 
-IN_PATH = "data/processed/panel_train_clean.csv"  # Input data path
-OUT_DIR = "data/splits"  # Output directory
+IN_PATH = "evaluation/data/processed/panel_train_clean.csv"  # Input data path
+OUT_DIR = "evaluation/data/splits"  # Output directory
 OUT_PATH = os.path.join(OUT_DIR, "holdout_stores.csv")  # Output file path
 
 SEED = 42

@@ -32,23 +32,43 @@ from training_helper import (
     build_target_cols,
     filter_issue_window,
     fill_missing_values,
+    filter_issue_ranges,
     make_eval_frame_from_open_predictions,
     compute_micro,
     compute_macro,
 )
 
-DATA_PATH = "data/processed/panel_train_clean.csv"
-HOLDOUT_PATH = "data/splits/holdout_stores.csv"
-SPLITS_PATH = "data/splits/time_splits_rolling.json"
+DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
+HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
+SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
 
-OUT_RESULTS_DIR = "experiments/model_selection/results"
-OUT_ARTIFACTS_DIR = "experiments/model_selection/artifacts"
+OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
+OUT_ARTIFACTS_DIR = "evaluation/experiments/model_selection/artifacts"
 os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
 os.makedirs(OUT_ARTIFACTS_DIR, exist_ok=True)
 
 HORIZONS = [1, 7, 14]
 TARGET = "Customers"
 SEED = 42
+
+TUNE_DAYS = 42
+
+
+def split_train_tune_by_time(d_train_all: pd.DataFrame, tune_days: int, gap_days: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    max_date = d_train_all["Date"].max()
+    tune_end = max_date
+    tune_start = tune_end - pd.Timedelta(days=tune_days - 1)
+
+    inner_train_end = tune_start - pd.Timedelta(days=gap_days + 1)
+
+    d_tune = d_train_all[(d_train_all["Date"] >= tune_start) & (d_train_all["Date"] <= tune_end)].copy()
+    d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
+
+    if d_inner.empty:
+        inner_train_end = tune_start - pd.Timedelta(days=1)
+        d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
+
+    return d_inner, d_tune
 
 
 def main() -> None:
@@ -79,10 +99,12 @@ def main() -> None:
     test_start = pd.to_datetime(splits["test"]["start"])
     test_end = pd.to_datetime(splits["test"]["end"])
 
+    gap_days = int(splits.get("meta", {}).get("GAP_DAYS", 28))
+
     for h in HORIZONS:
         print(f"\nTraining horizon: {h}")
         d = build_target_cols(dev, h, target_col=TARGET)
-        needed_cols = NUM_COLS + CAT_COLS + ["y", "open_future"]
+        needed_cols = ["Date"] + NUM_COLS + CAT_COLS + ["y", "open_future"]
 
         # Hyperparameter search across folds (macro WAPE)
         best_param = None
@@ -90,23 +112,20 @@ def main() -> None:
         for p in param_grid:
             fold_scores = []
             for fold in val_folds:
-                train_start = pd.to_datetime(fold["train"]["start"])
-                train_end = pd.to_datetime(fold["train"]["end"])
-                val_start = pd.to_datetime(fold["val"]["start"])
-                val_end = pd.to_datetime(fold["val"]["end"])
+                d_train_all = filter_issue_ranges(d, fold.get("train_ranges", []))[needed_cols].copy().dropna(subset=["y"])
+                d_train_all = fill_missing_values(d_train_all, NUM_COLS, CAT_COLS)
 
-                d_train = filter_issue_window(d, train_start, train_end)[needed_cols].copy().dropna(subset=["y"])
-                d_val = filter_issue_window(d, val_start, val_end)[needed_cols].copy().dropna(subset=["y"])
+                d_inner, d_tune = split_train_tune_by_time(d_train_all, TUNE_DAYS, gap_days)
 
-                d_train = fill_missing_values(d_train, NUM_COLS, CAT_COLS)
-                d_val = fill_missing_values(d_val, NUM_COLS, CAT_COLS)
+                d_inner_open = d_inner[d_inner["open_future"] == 1].copy()
+                d_tune_open = d_tune[d_tune["open_future"] == 1].copy()
 
-                d_train_open = d_train[d_train["open_future"] == 1].copy()
-                d_val_open = d_val[d_val["open_future"] == 1].copy()
+                if d_inner_open.empty or d_tune_open.empty:
+                    continue
 
-                X_train = d_train_open[NUM_COLS + CAT_COLS]
-                y_train = d_train_open["y"].to_numpy(dtype=float)
-                X_val_open = d_val_open[NUM_COLS + CAT_COLS]
+                X_train = d_inner_open[NUM_COLS + CAT_COLS]
+                y_train = d_inner_open["y"].to_numpy(dtype=float)
+                X_tune_open = d_tune_open[NUM_COLS + CAT_COLS]
 
                 pre = ColumnTransformer(
                     transformers=[
@@ -130,11 +149,11 @@ def main() -> None:
 
                 pipe.fit(X_train, np.log1p(y_train))
 
-                yhat_open = np.expm1(pipe.predict(X_val_open))
+                yhat_open = np.expm1(pipe.predict(X_tune_open))
                 yhat_open = np.maximum(0.0, yhat_open)
 
-                val_eval = make_eval_frame_from_open_predictions(d_val, yhat_open)
-                macro_metrics = compute_macro(val_eval)
+                tune_eval = make_eval_frame_from_open_predictions(d_tune, yhat_open)
+                macro_metrics = compute_macro(tune_eval)
                 fold_scores.append(macro_metrics["WAPE"])
 
             mean_score = float(np.mean(fold_scores)) if fold_scores else float("inf")
@@ -146,13 +165,12 @@ def main() -> None:
 
         # Cross-validation evaluation using best params
         fold_macro_wapes = []
-        for fold_idx, fold in enumerate(val_folds, start=1):
-            train_start = pd.to_datetime(fold["train"]["start"])
-            train_end = pd.to_datetime(fold["train"]["end"])
+        for fold in val_folds:
+            fold_id = str(fold.get("fold", ""))
+
+            d_train = filter_issue_ranges(d, fold.get("train_ranges", []))[needed_cols].copy().dropna(subset=["y"])
             val_start = pd.to_datetime(fold["val"]["start"])
             val_end = pd.to_datetime(fold["val"]["end"])
-
-            d_train = filter_issue_window(d, train_start, train_end)[needed_cols].copy().dropna(subset=["y"])
             d_val = filter_issue_window(d, val_start, val_end)[needed_cols].copy().dropna(subset=["y"])
 
             d_train = fill_missing_values(d_train, NUM_COLS, CAT_COLS)
@@ -201,7 +219,7 @@ def main() -> None:
                 "model": "lightgbm_log",
                 "horizon": h,
                 "split": "val",
-                "fold": fold_idx,
+                "fold": fold_id,
                 "agg": "micro",
                 "MAE": micro_metrics["MAE"],
                 "RMSE": micro_metrics["RMSE"],
@@ -214,7 +232,7 @@ def main() -> None:
                 "model": "lightgbm_log",
                 "horizon": h,
                 "split": "val",
-                "fold": fold_idx,
+                "fold": fold_id,
                 "agg": "macro",
                 "MAE": macro_metrics["MAE"],
                 "RMSE": macro_metrics["RMSE"],

@@ -28,30 +28,52 @@ from training_helper import (
     add_features_per_store,
     build_target_cols,
     filter_issue_window,
+    filter_issue_ranges,
     fill_missing_values,
     make_eval_frame_from_open_predictions,
     compute_micro,
     compute_macro,
 )
 
-DATA_PATH = "data/processed/panel_train_clean.csv"
-HOLDOUT_PATH = "data/splits/holdout_stores.csv"
-SPLITS_PATH = "data/splits/time_splits_rolling.json"
-
-OUT_RESULTS_DIR = "experiments/model_selection/results"
-OUT_ARTIFACTS_DIR = "experiments/model_selection/artifacts"
+DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
+HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
+SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
+OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
+OUT_ARTIFACTS_DIR = "evaluation/experiments/model_selection/artifacts"
 os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
 os.makedirs(OUT_ARTIFACTS_DIR, exist_ok=True)
 
 HORIZONS: List[int] = [1, 7, 14]
 TARGET = "Customers"
 
-TIME_BUDGET_PER_RUN: int = 300
+TIME_BUDGET_PER_RUN: int = 3600
 
 # AutoGluon fast + avoid internal CV leakage
 PRESETS = "medium_quality"
 NUM_BAG_FOLDS = 0
 NUM_STACK_LEVELS = 0
+
+TUNE_DAYS = 42
+
+def split_train_tune_by_time(d_train_all: pd.DataFrame, tune_days: int, gap_days: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    max_date = d_train_all["Date"].max()
+    tune_end = max_date
+    tune_start = tune_end - pd.Timedelta(days=tune_days - 1)
+
+    inner_train_end = tune_start - pd.Timedelta(days=gap_days + 1)
+
+    d_tune = d_train_all[(d_train_all["Date"] >= tune_start) & (d_train_all["Date"] <= tune_end)].copy()
+    d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
+
+    if d_inner.empty:
+        inner_train_end = tune_start - pd.Timedelta(days=1)
+        d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
+
+    if d_tune.empty:
+        d_tune = d_train_all.copy()
+
+    return d_inner, d_tune
+
 
 def train_and_evaluate_fold(
     d: pd.DataFrame,
@@ -60,16 +82,23 @@ def train_and_evaluate_fold(
     num_cols: List[str],
     cat_cols: List[str],
     time_budget: int,
+    gap_days: int,
+    tune_days: int,
 ) -> List[Dict[str, Any]]:
     
     # Train AutoGluon on one fold and return micro+macro metric rows.
     fold_idx = fold_info.get("fold", "")
-    train_start = pd.to_datetime(fold_info["train"]["start"])
-    train_end = pd.to_datetime(fold_info["train"]["end"])
     val_start = pd.to_datetime(fold_info["val"]["start"])
     val_end = pd.to_datetime(fold_info["val"]["end"])
 
-    d_train = filter_issue_window(d, train_start, train_end)
+    train_ranges = fold_info.get("train_ranges", None)
+    if train_ranges is not None:
+        d_train = filter_issue_ranges(d, train_ranges)
+    else:
+        train_start = pd.to_datetime(fold_info["train"]["start"])
+        train_end = pd.to_datetime(fold_info["train"]["end"])
+        d_train = filter_issue_window(d, train_start, train_end)
+
     d_val = filter_issue_window(d, val_start, val_end)
 
     needed_cols = ["Date"] + num_cols + cat_cols + ["y", "open_future"]
@@ -79,7 +108,10 @@ def train_and_evaluate_fold(
     d_train = fill_missing_values(d_train, num_cols, cat_cols)
     d_val = fill_missing_values(d_val, num_cols, cat_cols)
 
-    d_train_open = d_train[d_train["open_future"] == 1].copy()
+    d_inner, d_tune = split_train_tune_by_time(d_train, tune_days, gap_days)
+
+    d_train_open = d_inner[d_inner["open_future"] == 1].copy()
+    d_tune_open = d_tune[d_tune["open_future"] == 1].copy()
     d_val_open = d_val[d_val["open_future"] == 1].copy()
 
     feature_cols = num_cols + cat_cols
@@ -88,7 +120,7 @@ def train_and_evaluate_fold(
     train_df["y_log"] = np.log1p(train_df["y"].to_numpy(dtype=float))
     train_df = train_df.drop(columns=["y"])
 
-    tune_df = d_val_open[feature_cols + ["y"]].copy()
+    tune_df = d_tune_open[feature_cols + ["y"]].copy()
     tune_df["y_log"] = np.log1p(tune_df["y"].to_numpy(dtype=float))
     tune_df = tune_df.drop(columns=["y"])
 
@@ -281,6 +313,8 @@ def main() -> None:
     test_start = pd.to_datetime(splits["test"]["start"])
     test_end = pd.to_datetime(splits["test"]["end"])
 
+    gap_days = int(splits.get("meta", {}).get("GAP_DAYS", 28))
+
     results: List[Dict[str, Any]] = []
 
     for h in HORIZONS:
@@ -296,6 +330,8 @@ def main() -> None:
                 num_cols=NUM_COLS,
                 cat_cols=CAT_COLS,
                 time_budget=TIME_BUDGET_PER_RUN,
+                gap_days=gap_days,
+                tune_days=TUNE_DAYS,
             )
             for rec in fold_records:
                 results.append(rec)

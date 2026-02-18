@@ -31,18 +31,19 @@ from training_helper import (
     add_features_per_store,
     build_target_cols,
     filter_issue_window,
+    filter_issue_ranges,
     fill_missing_values,
     make_eval_frame_from_open_predictions,
     compute_micro,
     compute_macro,
 )
 
-DATA_PATH = "data/processed/panel_train_clean.csv"
-HOLDOUT_PATH = "data/splits/holdout_stores.csv"
-SPLITS_PATH = "data/splits/time_splits_rolling.json"
+DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
+HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
+SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
 
-OUT_RESULTS_DIR = "experiments/model_selection/results"
-OUT_ARTIFACTS_DIR = "experiments/model_selection/artifacts"
+OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
+OUT_ARTIFACTS_DIR = "evaluation/experiments/model_selection/artifacts"
 os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
 os.makedirs(OUT_ARTIFACTS_DIR, exist_ok=True)
 
@@ -51,7 +52,29 @@ TARGET = "Customers"
 SEED = 42
 
 # Fixed time budget (in seconds) for each AutoML run
-TIME_BUDGET_PER_RUN: int = 300
+TIME_BUDGET_PER_RUN: int = 3600
+
+TUNE_DAYS: int = 42
+GAP_DAYS: int = 28
+
+def split_train_tune_by_time(d_train_all: pd.DataFrame, tune_days: int, gap_days: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    max_date = d_train_all["Date"].max()
+    tune_end = max_date
+    tune_start = tune_end - pd.Timedelta(days=tune_days - 1)
+
+    inner_train_end = tune_start - pd.Timedelta(days=gap_days + 1)
+
+    d_tune = d_train_all[(d_train_all["Date"] >= tune_start) & (d_train_all["Date"] <= tune_end)].copy()
+    d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
+
+    if d_inner.empty:
+        inner_train_end = tune_start - pd.Timedelta(days=1)
+        d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
+
+    if d_tune.empty:
+        d_tune = d_train_all.copy()
+
+    return d_inner, d_tune
 
 
 def train_and_evaluate_fold(
@@ -67,15 +90,18 @@ def train_and_evaluate_fold(
     fold_idx = fold_info.get("fold")
 
     # Slice the training and validation windows
-    train_start = pd.to_datetime(fold_info["train"]["start"])
-    train_end = pd.to_datetime(fold_info["train"]["end"])
     val_start = pd.to_datetime(fold_info["val"]["start"])
     val_end = pd.to_datetime(fold_info["val"]["end"])
-    d_train = filter_issue_window(d, train_start, train_end)
+    if "train_ranges" in fold_info:
+        d_train = filter_issue_ranges(d, fold_info["train_ranges"])
+    else:
+        train_start = pd.to_datetime(fold_info["train"]["start"])
+        train_end = pd.to_datetime(fold_info["train"]["end"])
+        d_train = filter_issue_window(d, train_start, train_end)
     d_val = filter_issue_window(d, val_start, val_end)
 
     # Select relevant columns and drop rows with missing targets
-    needed_cols = num_cols + cat_cols + ["y", "open_future"]
+    needed_cols = ["Date"] + num_cols + cat_cols + ["y", "open_future"]
     d_train = d_train[needed_cols].copy().dropna(subset=["y"])
     d_val = d_val[needed_cols].copy().dropna(subset=["y"])
 
@@ -83,14 +109,21 @@ def train_and_evaluate_fold(
     d_val = fill_missing_values(d_val, num_cols, cat_cols)
 
     # Train only on open target days
-    d_train_open = d_train[d_train["open_future"] == 1].copy()
+    d_inner, d_tune = split_train_tune_by_time(d_train, TUNE_DAYS, GAP_DAYS)
+
+    d_train_open = d_inner[d_inner["open_future"] == 1].copy()
+    d_tune_open = d_tune[d_tune["open_future"] == 1].copy()
     d_val_open = d_val[d_val["open_future"] == 1].copy()
+
+    if len(d_tune_open) == 0:
+        d_tune_open = d_train_open.copy()
 
     # Prepare feature matrices
     X_train = d_train_open[num_cols + cat_cols]
-    X_val = d_val_open[num_cols + cat_cols]
+    X_val = d_tune_open[num_cols + cat_cols]
     y_train = d_train_open["y"].to_numpy(dtype=float)
-    y_val = d_val_open["y"].to_numpy(dtype=float)
+    y_val = d_tune_open["y"].to_numpy(dtype=float)
+
 
     y_train_log = np.log1p(y_train)
     y_val_log = np.log1p(y_val)
@@ -121,7 +154,9 @@ def train_and_evaluate_fold(
     elapsed = time.perf_counter() - start_time
 
     # Predict on open rows in validation set
-    yhat_open_log = automl.predict(X_val_t)
+    X_val_eval = d_val_open[num_cols + cat_cols]
+    X_val_eval_t = pre.transform(X_val_eval)
+    yhat_open_log = automl.predict(X_val_eval_t)
     yhat_open = np.expm1(yhat_open_log)
     yhat_open = np.maximum(0.0, yhat_open)
 
@@ -278,6 +313,9 @@ def main() -> None:
     holdout = pd.read_csv(HOLDOUT_PATH)
     with open(SPLITS_PATH, "r", encoding="utf-8") as f:
         splits = json.load(f)
+
+    global GAP_DAYS
+    GAP_DAYS = int(splits.get('meta', {}).get('GAP_DAYS', GAP_DAYS))
 
     # Exclude holdout stores from development data
     holdout_stores = set(holdout["Store"].tolist())

@@ -29,11 +29,11 @@ from training_helper import (
     compute_macro,
 )
 
-DATA_PATH = "data/processed/panel_train_clean.csv"
-HOLDOUT_PATH = "data/splits/holdout_stores.csv"
-SPLITS_PATH = "data/splits/time_splits_rolling.json"
+DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
+HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
+SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
 
-OUT_RESULTS_DIR = "experiments/model_selection/results"
+OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
 os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
 
 HORIZONS = [1, 7, 14]
@@ -138,8 +138,6 @@ def main() -> None:
 
     results: List[Dict] = []
     val_folds = splits.get("val_folds", [])
-    train_global_start = pd.to_datetime(splits["train_global"]["start"])
-    train_global_end = pd.to_datetime(splits["train_global"]["end"])
     test_start = pd.to_datetime(splits["test"]["start"])
     test_end = pd.to_datetime(splits["test"]["end"])
 
@@ -147,10 +145,11 @@ def main() -> None:
         d = build_targets(dev, h, target_col=TARGET)
 
         # val folds
-        for fold_idx, fold in enumerate(val_folds, start=1):
+        for fold in val_folds:
+            fold_id = str(fold.get("fold", ""))
             val_start = pd.to_datetime(fold["val"]["start"])
             val_end = pd.to_datetime(fold["val"]["end"])
-            results.extend(evaluate_split(d, h, "val", str(fold_idx), val_start, val_end))
+            results.extend(evaluate_split(d, h, "val", fold_id, val_start, val_end))
 
         # fixed test window
         results.extend(evaluate_split(d, h, "test", "", test_start, test_end))

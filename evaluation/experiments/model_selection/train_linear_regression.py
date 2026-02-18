@@ -17,18 +17,19 @@ from training_helper import (
     add_features_per_store,
     build_target_cols,
     filter_issue_window,
+    filter_issue_ranges,
     fill_missing_values,
     make_eval_frame_from_open_predictions,
     compute_micro,
     compute_macro,
 )
 
-DATA_PATH = "data/processed/panel_train_clean.csv"
-HOLDOUT_PATH = "data/splits/holdout_stores.csv"
-SPLITS_PATH = "data/splits/time_splits_rolling.json"
+DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
+HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
+SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
 
-OUT_RESULTS_DIR = "experiments/model_selection/results"
-OUT_ARTIFACTS_DIR = "experiments/model_selection/artifacts"
+OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
+OUT_ARTIFACTS_DIR = "evaluation/experiments/model_selection/artifacts"
 os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
 os.makedirs(OUT_ARTIFACTS_DIR, exist_ok=True)
 
@@ -59,14 +60,16 @@ for h in HORIZONS:
     needed_cols = NUM_COLS + CAT_COLS + ["y", "open_future"]
 
     fold_macro_wapes = []
-    for fold_idx, fold in enumerate(splits["val_folds"], start=1):
-        train_start = pd.to_datetime(fold["train"]["start"])
-        train_end = pd.to_datetime(fold["train"]["end"])
+    for fold in splits["val_folds"]:
+        fold_id = str(fold.get("fold", ""))
+
+        d_train = filter_issue_ranges(d, fold.get("train_ranges", []))
         val_start = pd.to_datetime(fold["val"]["start"])
         val_end = pd.to_datetime(fold["val"]["end"])
-
-        d_train = filter_issue_window(d, train_start, train_end)
         d_val = filter_issue_window(d, val_start, val_end)
+
+        if d_train.empty:
+            raise ValueError(f"Empty training set for fold={fold_id}")
 
         d_train = d_train[needed_cols].copy().dropna(subset=["y"])
         d_val = d_val[needed_cols].copy().dropna(subset=["y"])
@@ -74,7 +77,6 @@ for h in HORIZONS:
         d_train = fill_missing_values(d_train, NUM_COLS, CAT_COLS)
         d_val = fill_missing_values(d_val, NUM_COLS, CAT_COLS)
 
-        # Train only on open target days
         d_train_open = d_train[d_train["open_future"] == 1].copy()
         d_val_open = d_val[d_val["open_future"] == 1].copy()
 
@@ -109,7 +111,7 @@ for h in HORIZONS:
             "model": "linear_regression_log",
             "horizon": h,
             "split": "val",
-            "fold": fold_idx,
+            "fold": fold_id,
             "agg": "micro",
             "MAE": micro_metrics["MAE"],
             "RMSE": micro_metrics["RMSE"],
@@ -122,7 +124,7 @@ for h in HORIZONS:
             "model": "linear_regression_log",
             "horizon": h,
             "split": "val",
-            "fold": fold_idx,
+            "fold": fold_id,
             "agg": "macro",
             "MAE": macro_metrics["MAE"],
             "RMSE": macro_metrics["RMSE"],

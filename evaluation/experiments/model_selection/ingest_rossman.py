@@ -1,8 +1,8 @@
 import os
 import pandas as pd
 
-RAW_DIR = "data/raw"
-OUT_DIR = "data/processed"
+RAW_DIR = "evaluation/data/raw"
+OUT_DIR = "evaluation/data/processed"
 os.makedirs(RAW_DIR, exist_ok=True)
 os.makedirs(OUT_DIR, exist_ok=True)
 

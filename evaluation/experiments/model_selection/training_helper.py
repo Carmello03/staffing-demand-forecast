@@ -75,6 +75,17 @@ def filter_issue_window(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
     # Return a slice of df between issue dates start_date and end_date
     return df.loc[(df["Date"] >= start_date) & (df["Date"] <= end_date)].copy()
 
+def filter_issue_ranges(df: pd.DataFrame, ranges: List[dict]) -> pd.DataFrame:
+    # Return concatenated slices of df for multiple [start,end] issue-date ranges
+    parts: List[pd.DataFrame] = []
+    for r in ranges:
+        start = pd.to_datetime(r["start"])
+        end = pd.to_datetime(r["end"])
+        parts.append(filter_issue_window(df, start, end))
+    if len(parts) == 0:
+        return df.iloc[0:0].copy()
+    out = pd.concat(parts, axis=0, ignore_index=True)
+    return out
 
 def fill_missing_values(df: pd.DataFrame, num_cols: List[str] | None = None, cat_cols: List[str] | None = None) -> pd.DataFrame:
     # Fill missing values in numeric and categorical columns
