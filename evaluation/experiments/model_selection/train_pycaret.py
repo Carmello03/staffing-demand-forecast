@@ -51,7 +51,7 @@ HORIZONS: List[int] = [1, 7, 14]
 TARGET = "Customers"
 SEED = 42
 
-TIME_BUDGET_PER_RUN: int = 5
+TIME_BUDGET_PER_RUN: int = 20
 TUNE_DAYS: int = 42
 GAP_DAYS: int = 28
 

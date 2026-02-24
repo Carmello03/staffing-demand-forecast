@@ -46,7 +46,7 @@ os.makedirs(OUT_ARTIFACTS_DIR, exist_ok=True)
 HORIZONS: List[int] = [1, 7, 14]
 TARGET = "Customers"
 
-TIME_BUDGET_PER_RUN: int = 3600
+TIME_BUDGET_PER_RUN: int = 1200
 
 # AutoGluon fast + avoid internal CV leakage
 PRESETS = "medium_quality"

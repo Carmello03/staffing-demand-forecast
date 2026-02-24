@@ -52,7 +52,7 @@ TARGET = "Customers"
 SEED = 42
 
 # Fixed time budget (in seconds) for each AutoML run
-TIME_BUDGET_PER_RUN: int = 3600
+TIME_BUDGET_PER_RUN: int = 1200
 
 TUNE_DAYS: int = 42
 GAP_DAYS: int = 28
