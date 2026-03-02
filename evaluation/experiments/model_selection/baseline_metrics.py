@@ -154,7 +154,11 @@ def main() -> None:
         # fixed test window
         results.extend(evaluate_split(d, h, "test", "", test_start, test_end))
 
-    out = pd.DataFrame(results).sort_values(["model", "split", "fold", "horizon", "agg"]).reset_index(drop=True)
+    out = (
+        pd.DataFrame(results)
+        .sort_values(["split", "agg", "horizon", "fold"])
+        .reset_index(drop=True)
+    )
     out_path = os.path.join(OUT_RESULTS_DIR, "baseline_metrics.csv")
     out.to_csv(out_path, index=False)
     print("Saved:", out_path)

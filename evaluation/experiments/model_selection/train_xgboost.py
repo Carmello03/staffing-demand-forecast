@@ -332,7 +332,11 @@ def main() -> None:
         print("Saved model:", model_path)
         print("Saved params:", params_path)
 
-    out = pd.DataFrame(results).sort_values(["split", "fold", "horizon", "agg"]).reset_index(drop=True)
+    out = (
+        pd.DataFrame(results)
+        .sort_values(["split", "agg", "horizon", "fold"])
+        .reset_index(drop=True)
+    )
     out_path = os.path.join(OUT_RESULTS_DIR, "xgboost_metrics.csv")
     out.to_csv(out_path, index=False)
     print("Saved:", out_path)

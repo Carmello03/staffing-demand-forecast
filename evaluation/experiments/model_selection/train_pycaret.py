@@ -388,8 +388,11 @@ def main() -> None:
 
         print(f"Saved model: {os.path.join(OUT_ARTIFACTS_DIR, f'pycaret_h{h}.pkl')}")
 
-    out = pd.DataFrame(results)
-    out = out.sort_values(["split", "fold", "horizon", "agg"]).reset_index(drop=True)
+    out = (
+        pd.DataFrame(results)
+        .sort_values(["split", "agg", "horizon", "fold"])
+        .reset_index(drop=True)
+    )
     out_path = os.path.join(OUT_RESULTS_DIR, "pycaret_metrics.csv")
     out.to_csv(out_path, index=False)
     print("Saved:", out_path)

@@ -213,7 +213,11 @@ for h in HORIZONS:
     joblib.dump(pipe_final, model_path)
     print("Saved model:", model_path)
 
-out = pd.DataFrame(results).sort_values(["split", "fold", "horizon", "agg"]).reset_index(drop=True)
+out = (
+    pd.DataFrame(results)
+    .sort_values(["split", "agg", "horizon", "fold"])
+    .reset_index(drop=True)
+)
 out_path = os.path.join(OUT_RESULTS_DIR, "linear_regression_metrics.csv")
 out.to_csv(out_path, index=False)
 
