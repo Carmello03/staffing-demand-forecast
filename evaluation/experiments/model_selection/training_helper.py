@@ -62,14 +62,32 @@ def add_features_per_store(g: pd.DataFrame, target_col: str = "Customers") -> pd
 
     return g
 
-
 def build_target_cols(df: pd.DataFrame, h: int, target_col: str = "Customers") -> pd.DataFrame:
-    # Add shifted target and open indicator columns for horizson = h
     out = df.copy()
+
+    # Target and open/closed on the day we are predicting (t+h)
     out["y"] = out.groupby("Store")[target_col].shift(-h)
     out["open_future"] = out.groupby("Store")["Open"].shift(-h)
-    return out
 
+    # Align schedule features them to the target day (t+h)
+    out["SchoolHoliday"] = out.groupby("Store")["SchoolHoliday"].shift(-h)
+    out["StateHoliday"] = out.groupby("Store")["StateHoliday"].shift(-h)
+
+    # Calendar features should describe the target day (Date + h)
+    target_date = out["Date"] + pd.to_timedelta(h, unit="D")
+
+    out["DayOfWeek"] = target_date.dt.dayofweek + 1
+    out["month"] = target_date.dt.month
+    out["year"] = target_date.dt.year
+    out["weekofyear"] = target_date.dt.isocalendar().week.astype(int)
+    out["is_weekend"] = (out["DayOfWeek"] >= 6).astype(int)
+
+    out["dow_sin"] = np.sin(2 * np.pi * out["DayOfWeek"] / 7.0)
+    out["dow_cos"] = np.cos(2 * np.pi * out["DayOfWeek"] / 7.0)
+    out["month_sin"] = np.sin(2 * np.pi * out["month"] / 12.0)
+    out["month_cos"] = np.cos(2 * np.pi * out["month"] / 12.0)
+
+    return out
 
 def filter_issue_window(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
     # Return a slice of df between issue dates start_date and end_date
