@@ -51,7 +51,7 @@ HORIZONS: List[int] = [1, 7, 14]
 TARGET = "Customers"
 SEED = 42
 
-TIME_BUDGET_PER_RUN: int = 20
+TIME_BUDGET_PER_RUN: int = 5
 TUNE_DAYS: int = 42
 GAP_DAYS: int = 28
 
@@ -159,6 +159,19 @@ def train_and_evaluate_fold(
     best = finalize_model(best)
     train_time = float(time.time() - t0)
 
+    open_mask_train = (d_train["open_future"] == 1)
+    if open_mask_train.sum() > 0:
+        X_train_open = d_train.loc[open_mask_train, feature_cols].copy()
+        preds_train_df = predict_model(best, data=X_train_open)
+        yhat_train_log = preds_train_df["prediction_label"].to_numpy(dtype=float)
+        yhat_train = np.maximum(0.0, np.expm1(yhat_train_log))
+    else:
+        yhat_train = np.array([], dtype=float)
+
+    train_eval = make_eval_frame_from_open_predictions(d_train, yhat_train)
+    train_micro = compute_micro(train_eval)
+    train_macro = compute_macro(train_eval)
+
     if len(d_val_open) > 0:
         X_val_open = d_val_open[feature_cols].copy()
         preds_df = predict_model(best, data=X_val_open)
@@ -172,6 +185,36 @@ def train_and_evaluate_fold(
     macro = compute_macro(val_eval)
 
     records: List[Dict[str, Any]] = []
+    records.append({
+        "model": "pycaret_log",
+        "horizon": h,
+        "split": "train",
+        "fold": fold_idx,
+        "agg": "micro",
+        "MAE": train_micro["MAE"],
+        "RMSE": train_micro["RMSE"],
+        "WAPE": train_micro["WAPE"],
+        "Bias": train_micro["Bias"],
+        "N": train_micro["N"],
+        "training_time_seconds": train_time,
+        "stores": train_micro.get("stores", float("nan")),
+        "WAPE_p90": train_micro.get("WAPE_p90", float("nan")),
+    })
+    records.append({
+        "model": "pycaret_log",
+        "horizon": h,
+        "split": "train",
+        "fold": fold_idx,
+        "agg": "macro",
+        "MAE": train_macro["MAE"],
+        "RMSE": train_macro["RMSE"],
+        "WAPE": train_macro["WAPE"],
+        "Bias": train_macro["Bias"],
+        "N": train_macro["N"],
+        "training_time_seconds": train_time,
+        "stores": train_macro["stores"],
+        "WAPE_p90": train_macro["WAPE_p90"],
+    })
     records.append({
         "model": "pycaret_log",
         "horizon": h,
@@ -275,6 +318,19 @@ def train_and_evaluate_final(
     model_base = os.path.join(OUT_ARTIFACTS_DIR, f"pycaret_h{h}")
     save_model(best, model_base)
 
+    open_mask_train = (d_train_g["open_future"] == 1)
+    if open_mask_train.sum() > 0:
+        X_train_open = d_train_g.loc[open_mask_train, feature_cols].copy()
+        preds_train_df = predict_model(best, data=X_train_open)
+        yhat_train_log = preds_train_df["prediction_label"].to_numpy(dtype=float)
+        yhat_train = np.maximum(0.0, np.expm1(yhat_train_log))
+    else:
+        yhat_train = np.array([], dtype=float)
+
+    train_eval = make_eval_frame_from_open_predictions(d_train_g, yhat_train)
+    micro_train = compute_micro(train_eval)
+    macro_train = compute_macro(train_eval)
+
     open_mask_test = (d_test["open_future"] == 1)
     if open_mask_test.sum() > 0:
         X_test_open = d_test.loc[open_mask_test, feature_cols].copy()
@@ -289,6 +345,36 @@ def train_and_evaluate_final(
     macro = compute_macro(test_eval)
 
     records: List[Dict[str, Any]] = []
+    records.append({
+        "model": "pycaret_log",
+        "horizon": h,
+        "split": "train",
+        "fold": "",
+        "agg": "micro",
+        "MAE": micro_train["MAE"],
+        "RMSE": micro_train["RMSE"],
+        "WAPE": micro_train["WAPE"],
+        "Bias": micro_train["Bias"],
+        "N": micro_train["N"],
+        "training_time_seconds": train_time,
+        "stores": micro_train.get("stores", float("nan")),
+        "WAPE_p90": micro_train.get("WAPE_p90", float("nan")),
+    })
+    records.append({
+        "model": "pycaret_log",
+        "horizon": h,
+        "split": "train",
+        "fold": "",
+        "agg": "macro",
+        "MAE": macro_train["MAE"],
+        "RMSE": macro_train["RMSE"],
+        "WAPE": macro_train["WAPE"],
+        "Bias": macro_train["Bias"],
+        "N": macro_train["N"],
+        "training_time_seconds": train_time,
+        "stores": macro_train["stores"],
+        "WAPE_p90": macro_train["WAPE_p90"],
+    })
     records.append({
         "model": "pycaret_log",
         "horizon": h,
@@ -393,7 +479,7 @@ def main() -> None:
         .sort_values(["split", "agg", "horizon", "fold"])
         .reset_index(drop=True)
     )
-    out_path = os.path.join(OUT_RESULTS_DIR, "pycaret_metrics.csv")
+    out_path = os.path.join(OUT_RESULTS_DIR, "pycaret_metrics_quick.csv")
     out.to_csv(out_path, index=False)
     print("Saved:", out_path)
 

@@ -22,6 +22,7 @@ from training_helper import (
     make_eval_frame_from_open_predictions,
     compute_micro,
     compute_macro,
+    save_feature_importance,
 )
 
 DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
@@ -97,6 +98,12 @@ for h in HORIZONS:
         pipe.fit(X_train, np.log1p(y_train))
         train_time = float(time.time() - start_time)
 
+        yhat_train_open = np.expm1(pipe.predict(X_train))
+        yhat_train_open = np.maximum(0.0, yhat_train_open)
+        train_eval = make_eval_frame_from_open_predictions(d_train, yhat_train_open)
+        train_micro_metrics = compute_micro(train_eval)
+        train_macro_metrics = compute_macro(train_eval)
+
         yhat_val_open = np.expm1(pipe.predict(X_val))
         yhat_val_open = np.maximum(0.0, yhat_val_open)
 
@@ -106,6 +113,35 @@ for h in HORIZONS:
         macro_metrics = compute_macro(val_eval)
 
         fold_macro_wapes.append(macro_metrics["WAPE"])
+
+        results.append({
+            "model": "linear_regression_log",
+            "horizon": h,
+            "split": "train",
+            "fold": fold_id,
+            "agg": "micro",
+            "MAE": train_micro_metrics["MAE"],
+            "RMSE": train_micro_metrics["RMSE"],
+            "WAPE": train_micro_metrics["WAPE"],
+            "Bias": train_micro_metrics["Bias"],
+            "N": train_micro_metrics["N"],
+            "training_time_seconds": train_time,
+        })
+        results.append({
+            "model": "linear_regression_log",
+            "horizon": h,
+            "split": "train",
+            "fold": fold_id,
+            "agg": "macro",
+            "MAE": train_macro_metrics["MAE"],
+            "RMSE": train_macro_metrics["RMSE"],
+            "WAPE": train_macro_metrics["WAPE"],
+            "Bias": train_macro_metrics["Bias"],
+            "N": int(len(train_eval)),
+            "training_time_seconds": train_time,
+            "stores": train_macro_metrics["stores"],
+            "WAPE_p90": train_macro_metrics["WAPE_p90"],
+        })
 
         results.append({
             "model": "linear_regression_log",
@@ -170,6 +206,14 @@ for h in HORIZONS:
     pipe_final.fit(X_train_global, np.log1p(y_train_global))
     final_train_time = float(time.time() - start_time)
 
+    open_mask_train = (d_train_global["open_future"] == 1)
+    X_train_open_eval = d_train_global.loc[open_mask_train, NUM_COLS + CAT_COLS]
+    yhat_train_open = np.expm1(pipe_final.predict(X_train_open_eval))
+    yhat_train_open = np.maximum(0.0, yhat_train_open)
+    train_eval = make_eval_frame_from_open_predictions(d_train_global, yhat_train_open)
+    micro_train = compute_micro(train_eval)
+    macro_train = compute_macro(train_eval)
+
     open_mask_test = (d_test["open_future"] == 1)
     X_test_open = d_test.loc[open_mask_test, NUM_COLS + CAT_COLS]
     yhat_test_open = np.expm1(pipe_final.predict(X_test_open))
@@ -179,6 +223,35 @@ for h in HORIZONS:
 
     micro_test = compute_micro(test_eval)
     macro_test = compute_macro(test_eval)
+
+    results.append({
+        "model": "linear_regression_log",
+        "horizon": h,
+        "split": "train",
+        "fold": "",
+        "agg": "micro",
+        "MAE": micro_train["MAE"],
+        "RMSE": micro_train["RMSE"],
+        "WAPE": micro_train["WAPE"],
+        "Bias": micro_train["Bias"],
+        "N": micro_train["N"],
+        "training_time_seconds": final_train_time,
+    })
+    results.append({
+        "model": "linear_regression_log",
+        "horizon": h,
+        "split": "train",
+        "fold": "",
+        "agg": "macro",
+        "MAE": macro_train["MAE"],
+        "RMSE": macro_train["RMSE"],
+        "WAPE": macro_train["WAPE"],
+        "Bias": macro_train["Bias"],
+        "N": int(len(train_eval)),
+        "training_time_seconds": final_train_time,
+        "stores": macro_train["stores"],
+        "WAPE_p90": macro_train["WAPE_p90"],
+    })
 
     results.append({
         "model": "linear_regression_log",
@@ -212,6 +285,11 @@ for h in HORIZONS:
     model_path = os.path.join(OUT_ARTIFACTS_DIR, f"linear_regression_h{h}.joblib")
     joblib.dump(pipe_final, model_path)
     print("Saved model:", model_path)
+    importance_path = os.path.join(
+        OUT_ARTIFACTS_DIR,
+        f"linear_regression_h{h}_feature_weights.csv"
+    )
+    save_feature_importance(pipe_final, importance_path, kind="coef")
 
 out = (
     pd.DataFrame(results)

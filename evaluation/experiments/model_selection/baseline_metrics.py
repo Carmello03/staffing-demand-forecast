@@ -55,7 +55,9 @@ def seasonal_reference_shift(h: int) -> int:
     if h == 7:
         return 0
     if h == 14:
-        return 7
+        # Weekly seasonal-naive applied recursively:
+        # yhat(t+7)=y(t), so yhat(t+14)=yhat(t+7)=y(t).
+        return 0
     return 7
 
 

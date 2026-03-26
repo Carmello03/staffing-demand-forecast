@@ -72,6 +72,7 @@ def build_target_cols(df: pd.DataFrame, h: int, target_col: str = "Customers") -
     # Align schedule features them to the target day (t+h)
     out["SchoolHoliday"] = out.groupby("Store")["SchoolHoliday"].shift(-h)
     out["StateHoliday"] = out.groupby("Store")["StateHoliday"].shift(-h)
+    out["Promo"] = out.groupby("Store")["Promo"].shift(-h)
 
     # Calendar features should describe the target day (Date + h)
     target_date = out["Date"] + pd.to_timedelta(h, unit="D")
@@ -208,3 +209,44 @@ def compute_macro(df_eval: pd.DataFrame) -> dict:
         "stores": int(len(store_ids)),
         "WAPE_p90": float(np.percentile(wapes, 90)) if wapes else float("nan"),
     }
+
+def save_feature_importance(pipe, out_path, kind="auto"):
+    pre = pipe.named_steps["pre"]
+    model = pipe.named_steps["model"]
+
+    feature_names = pre.get_feature_names_out()
+
+    if kind == "auto":
+        if hasattr(model, "coef_"):
+            kind = "coef"
+        elif hasattr(model, "feature_importances_"):
+            kind = "importance"
+        else:
+            raise ValueError("Model does not support coefficients or feature importances.")
+
+    if kind == "coef":
+        coef = model.coef_.ravel()
+        imp_df = pd.DataFrame({
+            "feature": feature_names,
+            "weight": coef,
+            "abs_weight": np.abs(coef),
+        }).sort_values("abs_weight", ascending=False)
+
+    elif kind == "importance":
+        imp = model.feature_importances_
+        imp_df = pd.DataFrame({
+            "feature": feature_names,
+            "importance": imp,
+        }).sort_values("importance", ascending=False)
+
+    else:
+        raise ValueError("kind must be 'auto', 'coef', or 'importance'.")
+
+    # Remove store dummy variables
+    imp_df = imp_df[~imp_df["feature"].str.contains("Store")]
+
+    # keep top 30 most important
+    imp_df = imp_df.head(30)
+
+    imp_df.to_csv(out_path, index=False)
+    print("Saved non-store feature importance:", out_path)

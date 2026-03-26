@@ -147,6 +147,14 @@ def train_and_evaluate_fold(
     )
     train_time = float(time.perf_counter() - t0)
 
+    X_train_open = d_train_open[feature_cols]
+    yhat_train_log = predictor.predict(X_train_open, as_pandas=False)
+    yhat_train = np.expm1(np.asarray(yhat_train_log, dtype=float))
+    yhat_train = np.maximum(0.0, yhat_train)
+    train_eval = make_eval_frame_from_open_predictions(d_inner, yhat_train)
+    train_micro_metrics = compute_micro(train_eval)
+    train_macro_metrics = compute_macro(train_eval)
+
     # Predict only on open rows in val window
     X_val_open = d_val_open[feature_cols]
     yhat_open_log = predictor.predict(X_val_open, as_pandas=False)
@@ -161,6 +169,36 @@ def train_and_evaluate_fold(
     shutil.rmtree(fold_path, ignore_errors=True)
 
     records: List[Dict[str, Any]] = []
+    records.append({
+        "model": "autogluon_log",
+        "horizon": h,
+        "split": "train",
+        "fold": fold_idx,
+        "agg": "micro",
+        "MAE": train_micro_metrics["MAE"],
+        "RMSE": train_micro_metrics["RMSE"],
+        "WAPE": train_micro_metrics["WAPE"],
+        "Bias": train_micro_metrics["Bias"],
+        "N": train_micro_metrics["N"],
+        "training_time_seconds": train_time,
+        "stores": train_micro_metrics.get("stores", float("nan")),
+        "WAPE_p90": train_micro_metrics.get("WAPE_p90", float("nan")),
+    })
+    records.append({
+        "model": "autogluon_log",
+        "horizon": h,
+        "split": "train",
+        "fold": fold_idx,
+        "agg": "macro",
+        "MAE": train_macro_metrics["MAE"],
+        "RMSE": train_macro_metrics["RMSE"],
+        "WAPE": train_macro_metrics["WAPE"],
+        "Bias": train_macro_metrics["Bias"],
+        "N": train_macro_metrics["N"],
+        "training_time_seconds": train_time,
+        "stores": train_macro_metrics["stores"],
+        "WAPE_p90": train_macro_metrics["WAPE_p90"],
+    })
     records.append({
         "model": "autogluon_log",
         "horizon": h,
@@ -247,6 +285,15 @@ def train_and_evaluate_final(
     )
     train_time = float(time.perf_counter() - t0)
 
+    open_mask_train = (d_train_global["open_future"] == 1)
+    X_train_open = d_train_global.loc[open_mask_train, feature_cols]
+    yhat_train_log = predictor.predict(X_train_open, as_pandas=False) if len(X_train_open) else np.array([])
+    yhat_train = np.expm1(np.asarray(yhat_train_log, dtype=float)) if len(X_train_open) else np.array([])
+    yhat_train = np.maximum(0.0, yhat_train) if len(X_train_open) else yhat_train
+    train_eval = make_eval_frame_from_open_predictions(d_train_global, yhat_train)
+    micro_train = compute_micro(train_eval)
+    macro_train = compute_macro(train_eval)
+
     # Predict on open rows in test window
     open_mask_test = (d_test["open_future"] == 1)
     X_test_open = d_test.loc[open_mask_test, feature_cols]
@@ -259,6 +306,36 @@ def train_and_evaluate_final(
     macro_test = compute_macro(test_eval)
 
     records: List[Dict[str, Any]] = []
+    records.append({
+        "model": "autogluon_log",
+        "horizon": h,
+        "split": "train",
+        "fold": "",
+        "agg": "micro",
+        "MAE": micro_train["MAE"],
+        "RMSE": micro_train["RMSE"],
+        "WAPE": micro_train["WAPE"],
+        "Bias": micro_train["Bias"],
+        "N": micro_train["N"],
+        "training_time_seconds": train_time,
+        "stores": micro_train.get("stores", float("nan")),
+        "WAPE_p90": micro_train.get("WAPE_p90", float("nan")),
+    })
+    records.append({
+        "model": "autogluon_log",
+        "horizon": h,
+        "split": "train",
+        "fold": "",
+        "agg": "macro",
+        "MAE": macro_train["MAE"],
+        "RMSE": macro_train["RMSE"],
+        "WAPE": macro_train["WAPE"],
+        "Bias": macro_train["Bias"],
+        "N": macro_train["N"],
+        "training_time_seconds": train_time,
+        "stores": macro_train["stores"],
+        "WAPE_p90": macro_train["WAPE_p90"],
+    })
     records.append({
         "model": "autogluon_log",
         "horizon": h,

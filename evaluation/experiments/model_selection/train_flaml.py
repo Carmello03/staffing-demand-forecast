@@ -52,7 +52,7 @@ TARGET = "Customers"
 SEED = 42
 
 # Fixed time budget (in seconds) for each AutoML run
-TIME_BUDGET_PER_RUN: int = 1200
+TIME_BUDGET_PER_RUN: int = 300
 
 TUNE_DAYS: int = 42
 GAP_DAYS: int = 28
@@ -153,6 +153,13 @@ def train_and_evaluate_fold(
     )
     elapsed = time.perf_counter() - start_time
 
+    yhat_train_log = automl.predict(X_train_t)
+    yhat_train = np.expm1(yhat_train_log)
+    yhat_train = np.maximum(0.0, yhat_train)
+    train_eval = make_eval_frame_from_open_predictions(d_inner, yhat_train)
+    train_micro_metrics = compute_micro(train_eval)
+    train_macro_metrics = compute_macro(train_eval)
+
     # Predict on open rows in validation set
     X_val_eval = d_val_open[num_cols + cat_cols]
     X_val_eval_t = pre.transform(X_val_eval)
@@ -166,6 +173,37 @@ def train_and_evaluate_fold(
     macro_metrics = compute_macro(val_eval)
 
     records: List[Dict[str, Any]] = []
+
+    records.append({
+        "model": "flaml_log",
+        "horizon": h,
+        "split": "train",
+        "fold": fold_idx,
+        "agg": "micro",
+        "MAE": train_micro_metrics["MAE"],
+        "RMSE": train_micro_metrics["RMSE"],
+        "WAPE": train_micro_metrics["WAPE"],
+        "Bias": train_micro_metrics["Bias"],
+        "N": train_micro_metrics["N"],
+        "training_time_seconds": elapsed,
+        "stores": train_micro_metrics.get("stores", float("nan")),
+        "WAPE_p90": train_micro_metrics.get("WAPE_p90", float("nan")),
+    })
+    records.append({
+        "model": "flaml_log",
+        "horizon": h,
+        "split": "train",
+        "fold": fold_idx,
+        "agg": "macro",
+        "MAE": train_macro_metrics["MAE"],
+        "RMSE": train_macro_metrics["RMSE"],
+        "WAPE": train_macro_metrics["WAPE"],
+        "Bias": train_macro_metrics["Bias"],
+        "N": train_macro_metrics["N"],
+        "training_time_seconds": elapsed,
+        "stores": train_macro_metrics["stores"],
+        "WAPE_p90": train_macro_metrics["WAPE_p90"],
+    })
 
     # Micro row 
     records.append({
@@ -251,6 +289,13 @@ def train_and_evaluate_final(
     )
     elapsed = time.perf_counter() - start_time
 
+    yhat_train_log = automl.predict(X_train_g_t)
+    yhat_train = np.expm1(yhat_train_log)
+    yhat_train = np.maximum(0.0, yhat_train)
+    train_eval = make_eval_frame_from_open_predictions(d_train_global, yhat_train)
+    micro_train = compute_micro(train_eval)
+    macro_train = compute_macro(train_eval)
+
     # Evaluate on test set
     test_eval = d_test[["Store", "y", "open_future"]].copy()
     test_eval["yhat"] = 0.0  # default for closed days
@@ -269,6 +314,36 @@ def train_and_evaluate_final(
     macro_test = compute_macro(test_eval)
 
     records: List[Dict[str, Any]] = []
+    records.append({
+        "model": "flaml_log",
+        "horizon": h,
+        "split": "train",
+        "fold": "",
+        "agg": "micro",
+        "MAE": micro_train["MAE"],
+        "RMSE": micro_train["RMSE"],
+        "WAPE": micro_train["WAPE"],
+        "Bias": micro_train["Bias"],
+        "N": micro_train["N"],
+        "training_time_seconds": elapsed,
+        "stores": micro_train.get("stores", float("nan")),
+        "WAPE_p90": micro_train.get("WAPE_p90", float("nan")),
+    })
+    records.append({
+        "model": "flaml_log",
+        "horizon": h,
+        "split": "train",
+        "fold": "",
+        "agg": "macro",
+        "MAE": macro_train["MAE"],
+        "RMSE": macro_train["RMSE"],
+        "WAPE": macro_train["WAPE"],
+        "Bias": macro_train["Bias"],
+        "N": macro_train["N"],
+        "training_time_seconds": elapsed,
+        "stores": macro_train["stores"],
+        "WAPE_p90": macro_train["WAPE_p90"],
+    })
     records.append({
         "model": "flaml_log",
         "horizon": h,
@@ -385,7 +460,7 @@ def main() -> None:
         .sort_values(["split", "agg", "horizon", "fold"])
         .reset_index(drop=True)
     )
-    out_path = os.path.join(OUT_RESULTS_DIR, "flaml_metrics.csv")
+    out_path = os.path.join(OUT_RESULTS_DIR, "flaml_metrics_quick.csv")
     out.to_csv(out_path, index=False)
     print("Saved:", out_path)
 
