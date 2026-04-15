@@ -7,6 +7,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
+import sklearn.compose._column_transformer as sklearn_column_transformer
 
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
@@ -38,6 +39,17 @@ SEED = 42
 N_ESTIMATORS = 1200
 
 SAVE_LOCAL_MODELS = True
+
+
+def add_sklearn_pickle_compat() -> None:
+    # Compatibility shim for artifacts saved with a newer sklearn version.
+    if hasattr(sklearn_column_transformer, "_RemainderColsList"):
+        return
+
+    class _RemainderColsList(list):
+        pass
+
+    sklearn_column_transformer._RemainderColsList = _RemainderColsList
 
 
 def build_pipe(best_param: dict) -> Pipeline:
@@ -88,6 +100,7 @@ def pick_metric_row(agg_rows: list, scope: str, horizon: int, agg: str) -> dict:
 def main() -> None:
     os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
     os.makedirs(OUT_LOCAL_ARTIFACTS_DIR, exist_ok=True)
+    add_sklearn_pickle_compat()
 
     print("Loading data...")
     df = pd.read_csv(DATA_PATH, parse_dates=["Date"], dtype={"StateHoliday": "string"})
