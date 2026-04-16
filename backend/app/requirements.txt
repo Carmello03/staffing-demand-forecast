@@ -1,0 +1,11 @@
+fastapi==0.129.0
+starlette==0.52.1
+uvicorn==0.40.0
+firebase_admin==7.1.0
+python-dotenv==1.2.1
+pandas==2.2.3
+numpy==1.26.4
+joblib==1.4.2
+scikit-learn==1.5.2
+lightgbm==4.5.0
+shap==0.46.0

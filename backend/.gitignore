@@ -1,0 +1,15 @@
+# Backend secrets/config
+app/.env
+app/.env.*
+app/staffing-demand-forecast-firebase-adminsdk-*.json
+
+# Python cache/env
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Local runtime
+*.log

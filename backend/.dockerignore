@@ -1,0 +1,19 @@
+# Never bake credentials into the image
+app/*.json
+app/.env
+app/get_token.py
+
+# Python cache
+**/__pycache__/
+**/*.py[cod]
+**/*.pyo
+
+# Git
+.git/
+.gitignore
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
