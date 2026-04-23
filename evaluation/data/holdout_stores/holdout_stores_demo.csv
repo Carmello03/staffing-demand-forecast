@@ -1,0 +1,16 @@
+Store,band,gap_days,cutoff_date,is_uptodate
+57,large,0,2015-07-31,True
+123,large,0,2026-03-13,True
+203,large,0,2026-03-13,True
+964,large,0,2015-07-31,True
+1006,large,0,2015-07-31,True
+43,medium,0,2015-07-31,True
+97,medium,7,2015-07-24,False
+155,medium,1,2015-07-30,False
+929,medium,1,2015-07-30,False
+976,medium,1,2015-07-30,False
+49,small,0,2015-07-31,True
+83,small,1,2015-07-30,False
+162,small,0,2026-03-13,True
+942,small,1,2015-07-30,False
+977,small,0,2015-07-31,True

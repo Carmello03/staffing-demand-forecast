@@ -1,0 +1,98 @@
+{
+  "horizons": [
+    1,
+    7,
+    14
+  ],
+  "seeds": [
+    0,
+    42,
+    123
+  ],
+  "models_to_run": [
+    "lightgbm",
+    "autogluon",
+    "autogluon_quick",
+    "xgboost",
+    "flaml_quick",
+    "pycaret",
+    "pycaret_quick",
+    "flaml",
+    "linear_regression",
+    "last_value"
+  ],
+  "model_configs": {
+    "lightgbm": {
+      "kind": "lightgbm",
+      "params_by_h": {
+        "1": {
+          "num_leaves": 63,
+          "learning_rate": 0.1
+        },
+        "7": {
+          "num_leaves": 31,
+          "learning_rate": 0.05
+        },
+        "14": {
+          "num_leaves": 31,
+          "learning_rate": 0.05
+        }
+      }
+    },
+    "xgboost": {
+      "kind": "xgboost",
+      "params_by_h": {
+        "1": {
+          "max_depth": 10,
+          "learning_rate": 0.1
+        },
+        "7": {
+          "max_depth": 6,
+          "learning_rate": 0.05
+        },
+        "14": {
+          "max_depth": 6,
+          "learning_rate": 0.05
+        }
+      }
+    },
+    "linear_regression": {
+      "kind": "linear_regression"
+    },
+    "last_value": {
+      "kind": "last_value"
+    },
+    "autogluon": {
+      "kind": "autogluon",
+      "time_limit_seconds": 1200,
+      "artifact_tag": "autogluon"
+    },
+    "autogluon_quick": {
+      "kind": "autogluon",
+      "time_limit_seconds": 300,
+      "artifact_tag": "autogluon_quick"
+    },
+    "flaml": {
+      "kind": "flaml",
+      "time_limit_seconds": 1200
+    },
+    "flaml_quick": {
+      "kind": "flaml",
+      "time_limit_seconds": 300
+    },
+    "pycaret": {
+      "kind": "pycaret",
+      "budget_time_minutes": 20
+    },
+    "pycaret_quick": {
+      "kind": "pycaret",
+      "budget_time_minutes": 5
+    }
+  },
+  "enable_charts": true,
+  "resume_from_existing": true,
+  "skip_existing_statuses": [
+    "ok"
+  ],
+  "save_after_each_row": true
+}
