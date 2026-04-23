@@ -1,28 +1,48 @@
-import pandas as pd
+﻿import pandas as pd
 import os
 
-RESULTS_DIR = r"evaluation\experiments\model_selection\results"
-HORIZON_SUMMARY_CSV = os.path.join(RESULTS_DIR, "model_horizon_summary.csv")
-HORIZON_WAPE_MATRIX_CSV = os.path.join(RESULTS_DIR, "model_horizon_wape_matrix.csv")
+RESULTS_DIR = "evaluation/experiments/model_selection/results"
+MODEL_RESULTS_DIR = os.path.join(RESULTS_DIR, "model_metrics")
+HORIZON_SUMMARY_CSV = os.path.join(MODEL_RESULTS_DIR, "model_horizon_summary.csv")
+HORIZON_WAPE_MATRIX_CSV = os.path.join(MODEL_RESULTS_DIR, "model_horizon_wape_matrix.csv")
 
-# plot the error accorss the horizon for holodout stores, possibilty that test set may be weird or there is a bug
-# find why t+7 is not performing over t+1 and t+14, find error acorss the stores
-# 
 
-FILES = {
-    "baseline": "baseline_metrics.csv",
-    "linear_regression": "linear_regression_metrics.csv",
-    "lightgbm": "lightgbm_metrics.csv",
-    "xgboost": "xgboost_metrics.csv",
-    "flaml": "flaml_metrics.csv",
-    "autogluon": "autogluon_metrics.csv",
-    "pycaret": "pycaret_metrics.csv",
-    "autogluon_quick":"autogluon_metrics_quick.csv",
-    "flaml_quick": "flaml_metrics_quick.csv",
-}
-
-# close threshold for primary metrsic Wape to consider tie-breakers
 CLOSE_EPS = 0.30
+
+
+def model_key_from_filename(filename: str):
+    # Examples:
+    # - lightgbm_metrics.csv      -> lightgbm
+    # - flaml_metrics_quick.csv   -> flaml_quick
+    # - baseline_metrics.csv      -> last_value
+    if filename.endswith("_metrics_quick.csv"):
+        key = filename[:-len("_metrics_quick.csv")] + "_quick"
+    elif filename.endswith("_metrics.csv"):
+        key = filename[:-len("_metrics.csv")]
+    else:
+        return None
+
+    if key == "baseline":
+        return "last_value"
+    return key
+
+
+def discover_metric_files():
+    # Auto-discover per-model metric CSVs from one folder.
+    if not os.path.isdir(MODEL_RESULTS_DIR):
+        return []
+
+    discovered = []
+    for filename in sorted(os.listdir(MODEL_RESULTS_DIR)):
+        if not filename.lower().endswith(".csv"):
+            continue
+        key = model_key_from_filename(filename)
+        if key is None:
+            continue
+        path = os.path.join(MODEL_RESULTS_DIR, filename)
+        if os.path.isfile(path):
+            discovered.append((key, path))
+    return discovered
 
 def get_mean_test_macro_wape(df):
     d = df[
@@ -65,7 +85,6 @@ def sort_by_primary(row):
 
 
 def sort_by_tie(row):
-    # tie-break logic: 1) lower Bias at t+7 (TEST)  2) lower training time (TEST)
     return (row["abs_bias_t7"], row["train_time"])
 
 
@@ -77,8 +96,6 @@ def display_model_name(raw_name: str) -> str:
 
 
 def mapped_display_name(file_key: str, all_models_in_file: list[str], raw_model_name: str) -> str:
-    # If a file has one model variant, use the FILES map key (e.g., autogluon_quick).
-    # If a file has multiple model variants, keep the model names from the file.
     if len(all_models_in_file) == 1:
         return str(file_key)
     return display_model_name(raw_model_name)
@@ -108,7 +125,6 @@ def build_horizon_summary(rows_by_model_h: list[dict]) -> pd.DataFrame:
 
     out = pd.DataFrame(rows_by_model_h)
 
-    # rank by test WAPE within each horizon (1 is best, lower WAPE is better)
     out["rank_test_wape_within_horizon"] = (
         out.groupby("horizon")["test_wape"]
         .rank(method="dense", ascending=True)
@@ -129,7 +145,6 @@ def build_wape_matrix(h_summary: pd.DataFrame) -> pd.DataFrame:
     index_col = "model_display" if "model_display" in h_summary.columns else "model"
     piv = h_summary.pivot_table(index=index_col, columns="horizon", values="test_wape", aggfunc="mean")
 
-    # Stable, easy-to-scan column names.
     rename_map = {}
     for c in piv.columns.tolist():
         rename_map[c] = f"h{int(c)}_test_wape"
@@ -159,8 +174,16 @@ def main():
     print("Tie-breakers:    1) lower Bias at t+7 (TEST)  2) lower training time (TEST)")
     print(f"Close threshold: {CLOSE_EPS:.2f} WAPE points\n")
 
-    for model, filename in FILES.items():
-        path = os.path.join(RESULTS_DIR, filename)
+    metric_files = discover_metric_files()
+    if not metric_files:
+        print(f"No model metric CSVs found in: {MODEL_RESULTS_DIR}")
+        print("Add files like lightgbm_metrics.csv, flaml_metrics.csv, autogluon_metrics_quick.csv, baseline_metrics.csv")
+        return
+
+    print(f"Model metrics folder: {MODEL_RESULTS_DIR}")
+    print(f"Discovered {len(metric_files)} metric file(s)\n")
+
+    for model, path in metric_files:
         if not os.path.exists(path):
             continue
 
@@ -195,7 +218,6 @@ def main():
                 "train_time": train_time if train_time is not None else float("inf"),
             })
 
-            # Per-horizon compact summary from macro rows.
             d_macro = d_model[d_model["agg"] == "macro"].copy() if "agg" in d_model.columns else d_model.copy()
             if d_macro.empty or "horizon" not in d_macro.columns:
                 continue
@@ -229,7 +251,6 @@ def main():
         print("No results found.")
         return
 
-    # Summary table
     print("Summary (lower is better):")
     print(f"{'Model':<18} {'TestWAPE':>9} {'ValWAPE':>9} {'Bias@t+7':>11} {'Train(s)':>9}")
     print("-" * 60)
@@ -244,7 +265,6 @@ def main():
             f"{r['train_time']:>9.1f}"
         )
 
-    # Tie-breaking logic
     best_primary = rows_for_print[0]["test_wape"]
 
     close_set = []
@@ -268,7 +288,6 @@ def main():
                 f"Train={r['train_time']:.1f}s"
             )
 
-    # Final winner summary
     print("\nFINAL DECISION")
     print("-------------")
     print("Winner:", winner["model_display"].upper())
@@ -278,7 +297,6 @@ def main():
     print(f"Extra (Val mean macro WAPE):    {winner['val_wape']:.4f}")
     print()
 
-    # Write compact horizon summary outputs.
     h_summary = build_horizon_summary(horizon_rows)
     wape_matrix = build_wape_matrix(h_summary)
 

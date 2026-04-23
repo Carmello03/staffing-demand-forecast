@@ -1,7 +1,6 @@
 """
-Baselines:
+Baseline:
 - last_value: predict Customers
-- seasonal_naive: horizon-dependent lag
 
 Evaluation:
 - Train/eval windows from data/splits/time_splits_rolling.json
@@ -33,7 +32,7 @@ DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
 HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
 SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
 
-OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
+OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results/model_metrics"
 os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
 
 HORIZONS = [1, 7, 14]
@@ -48,21 +47,8 @@ def build_targets(df: pd.DataFrame, h: int, target_col: str = TARGET) -> pd.Data
     return d
 
 
-def seasonal_reference_shift(h: int) -> int:
-    # Lag used for the seasonal naive baseline
-    if h == 1:
-        return 6
-    if h == 7:
-        return 0
-    if h == 14:
-        # Weekly seasonal-naive applied recursively:
-        # yhat(t+7)=y(t), so yhat(t+14)=yhat(t+7)=y(t).
-        return 0
-    return 7
-
-
 def evaluate_split(d: pd.DataFrame, h: int, split_name: str, fold: str, start: pd.Timestamp, end: pd.Timestamp) -> List[Dict]:
-    # Evaluate both baselines on a given stary and end window
+    # Evaluate baseline on a given start and end window
     out_rows: List[Dict] = []
     d_win = filter_issue_window(d, start, end).copy()
 
@@ -70,55 +56,50 @@ def evaluate_split(d: pd.DataFrame, h: int, split_name: str, fold: str, start: p
     open_col = f"open_future_{h}"
     d_win = d_win.dropna(subset=[y_col]).copy()
 
-    # last_value baseline: Customers
-    for model_name, yhat_open in [
-        ("last_value", d_win[TARGET].to_numpy(dtype=float)),
-        ("seasonal_naive", d_win.groupby("Store")[TARGET].shift(seasonal_reference_shift(h)).to_numpy(dtype=float)),
-    ]:
-        # default yhat to 0 for closed days
-        eval_df = pd.DataFrame({
-            "Store": d_win["Store"].to_numpy(),
-            "y": d_win[y_col].to_numpy(dtype=float),
-            "open_future": d_win[open_col].to_numpy(dtype=float),
-        })
-        eval_df["yhat"] = 0.0
-        open_mask = eval_df["open_future"] == 1
+    # last_value baseline: predict future with current value y(t)
+    yhat_open = d_win[TARGET].to_numpy(dtype=float)
 
-        # guard against NaNs in baseline
-        yhat_open = np.nan_to_num(yhat_open, nan=0.0)
-        eval_df.loc[open_mask, "yhat"] = yhat_open[open_mask.to_numpy()]
+    # default yhat to 0 for closed days
+    eval_df = pd.DataFrame({
+        "Store": d_win["Store"].to_numpy(),
+        "y": d_win[y_col].to_numpy(dtype=float),
+        "open_future": d_win[open_col].to_numpy(dtype=float),
+    })
+    eval_df["yhat"] = 0.0
+    open_mask = eval_df["open_future"] == 1
+    eval_df.loc[open_mask, "yhat"] = yhat_open[open_mask.to_numpy()]
 
-        micro = compute_micro(eval_df)
-        macro = compute_macro(eval_df)
+    micro = compute_micro(eval_df)
+    macro = compute_macro(eval_df)
 
-        out_rows.append({
-            "model": model_name,
-            "horizon": h,
-            "split": split_name,
-            "fold": fold,
-            "agg": "micro",
-            "MAE": micro["MAE"],
-            "RMSE": micro["RMSE"],
-            "WAPE": micro["WAPE"],
-            "Bias": micro["Bias"],
-            "N": micro["N"],
-            "training_time_seconds": 0.0,
-        })
-        out_rows.append({
-            "model": model_name,
-            "horizon": h,
-            "split": split_name,
-            "fold": fold,
-            "agg": "macro",
-            "MAE": macro["MAE"],
-            "RMSE": macro["RMSE"],
-            "WAPE": macro["WAPE"],
-            "Bias": macro["Bias"],
-            "N": int(len(eval_df)),
-            "training_time_seconds": 0.0,
-            "stores": macro["stores"],
-            "WAPE_p90": macro["WAPE_p90"],
-        })
+    out_rows.append({
+        "model": "last_value",
+        "horizon": h,
+        "split": split_name,
+        "fold": fold,
+        "agg": "micro",
+        "MAE": micro["MAE"],
+        "RMSE": micro["RMSE"],
+        "WAPE": micro["WAPE"],
+        "Bias": micro["Bias"],
+        "N": micro["N"],
+        "training_time_seconds": 0.0,
+    })
+    out_rows.append({
+        "model": "last_value",
+        "horizon": h,
+        "split": split_name,
+        "fold": fold,
+        "agg": "macro",
+        "MAE": macro["MAE"],
+        "RMSE": macro["RMSE"],
+        "WAPE": macro["WAPE"],
+        "Bias": macro["Bias"],
+        "N": int(len(eval_df)),
+        "training_time_seconds": 0.0,
+        "stores": macro["stores"],
+        "WAPE_p90": macro["WAPE_p90"],
+    })
 
     return out_rows
 

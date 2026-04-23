@@ -1,4 +1,4 @@
-"""
+﻿"""
 Analyze per-target-date error spikes for direct horizon models.
 
 Purpose:
@@ -52,15 +52,11 @@ DAILY_RESULTS_DIR = RESULTS_DIR / "daily_results"
 
 TARGET = "Customers"
 HORIZONS = [1, 7, 14]
-# Keep this hardcoded and simple for FYP experiments.
-# Change this single value when you want a different model.
-# Examples: "flaml", "lightgbm", "xgboost", "linear_regression"
 ARTIFACT_PREFIX = "autogluon"
 TOP_SPIKE_DAYS = 15
 
 
 def add_sklearn_pickle_compat() -> None:
-    # Compatibility shim for artifacts saved with a newer sklearn version.
     if hasattr(sklearn_column_transformer, "_RemainderColsList"):
         return
 

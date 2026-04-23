@@ -14,13 +14,77 @@ model,horizon,split,fold,agg,MAE,RMSE,WAPE,Bias,N,training_time_seconds,stores,W
 import os
 import json
 import time
+import inspect
 import warnings
+from contextlib import contextmanager
 from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
+import sklearn.utils as sklearn_utils
 
 warnings.filterwarnings("ignore")
+
+# Compatibility shim for PyCaret on newer scikit-learn versions where
+# sklearn.utils._print_elapsed_time is no longer exported.
+if not hasattr(sklearn_utils, "_print_elapsed_time"):
+    @contextmanager
+    def _print_elapsed_time(*args, **kwargs):
+        yield
+
+    sklearn_utils._print_elapsed_time = _print_elapsed_time
+
+# Compatibility shim for PyCaret expecting joblib.MemorizedFunc to expose
+# _get_output_identifiers (missing in some joblib versions).
+try:
+    from joblib.memory import MemorizedFunc
+    from joblib._store_backends import StoreBackendMixin
+
+    if not getattr(StoreBackendMixin.load_item, "_pycaret_compat_wrapped", False):
+        _orig_load_item = StoreBackendMixin.load_item
+
+        def _load_item_compat(self, call_id, *args, **kwargs):
+            # PyCaret may pass msg=..., which some joblib versions no longer accept.
+            kwargs.pop("msg", None)
+            return _orig_load_item(self, call_id, *args, **kwargs)
+
+        _load_item_compat._pycaret_compat_wrapped = True
+        StoreBackendMixin.load_item = _load_item_compat
+
+    if not hasattr(MemorizedFunc, "_get_output_identifiers"):
+        def _get_output_identifiers(self, *args, **kwargs):
+            return self.func_id, self._get_args_id(*args, **kwargs)
+
+        MemorizedFunc._get_output_identifiers = _get_output_identifiers
+
+    if not getattr(MemorizedFunc._persist_input, "_pycaret_compat_wrapped", False):
+        _orig_persist_input = MemorizedFunc._persist_input
+        _persist_params = tuple(inspect.signature(_orig_persist_input).parameters.keys())
+        _persist_uses_call_id = len(_persist_params) >= 3 and _persist_params[2] == "call_id"
+
+        # Only patch when the installed joblib API requires call_id.
+        # joblib 1.3.x already uses _persist_input(duration, args, kwargs)
+        # and should not be rewritten.
+        if _persist_uses_call_id:
+            def _persist_input_compat(self, duration, *args, **kwargs):
+                # New joblib API path.
+                if len(args) >= 3:
+                    return _orig_persist_input(self, duration, *args, **kwargs)
+
+                # Old PyCaret call style: _persist_input(duration, args, kwargs)
+                if len(args) == 2:
+                    call_args, call_kwargs = args
+                    if hasattr(self, "_get_output_identifiers") and isinstance(call_kwargs, dict):
+                        call_id = self._get_output_identifiers(*call_args, **call_kwargs)
+                        return _orig_persist_input(self, duration, call_id, call_args, call_kwargs, **kwargs)
+                    return _orig_persist_input(self, duration, *args, **kwargs)
+
+                return _orig_persist_input(self, duration, *args, **kwargs)
+
+            _persist_input_compat._pycaret_compat_wrapped = True
+            MemorizedFunc._persist_input = _persist_input_compat
+except Exception:
+    pass
 
 from training_helper import (
     NUM_COLS,
@@ -42,7 +106,7 @@ DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
 HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
 SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
 
-OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
+OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results/model_metrics"
 OUT_ARTIFACTS_DIR = "evaluation/experiments/model_selection/artifacts"
 os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
 os.makedirs(OUT_ARTIFACTS_DIR, exist_ok=True)
@@ -51,9 +115,33 @@ HORIZONS: List[int] = [1, 7, 14]
 TARGET = "Customers"
 SEED = 42
 
-TIME_BUDGET_PER_RUN: int = 5
+RUN_BOTH_LONG_AND_QUICK: bool = True
+
+# PyCaret compare_models budget_time is in minutes.
+LONG_TIME_BUDGET_PER_RUN: int = 20
+QUICK_TIME_BUDGET_PER_RUN: int = 5
+
 TUNE_DAYS: int = 42
 GAP_DAYS: int = 28
+
+
+def get_run_configs() -> List[Dict[str, Any]]:
+    long_cfg = {
+        "tag": "long",
+        "time_budget": LONG_TIME_BUDGET_PER_RUN,
+        "metrics_filename": "pycaret_metrics.csv",
+        "artifact_prefix": "pycaret",
+    }
+    quick_cfg = {
+        "tag": "quick",
+        "time_budget": QUICK_TIME_BUDGET_PER_RUN,
+        "metrics_filename": "pycaret_metrics_quick.csv",
+        "artifact_prefix": "pycaret_quick",
+    }
+    if RUN_BOTH_LONG_AND_QUICK:
+        return [long_cfg, quick_cfg]
+    return [long_cfg]
+
 
 def clean_categoricals(df: pd.DataFrame, cat_cols: List[str]) -> pd.DataFrame:
     df = df.copy()
@@ -79,8 +167,6 @@ def split_train_tune_by_time(d_train_all: pd.DataFrame, tune_days: int, gap_days
         d_tune = d_train_all.copy()
 
     return d_inner, d_tune
-
-
 
 def train_and_evaluate_fold(
     d: pd.DataFrame,
@@ -254,6 +340,7 @@ def train_and_evaluate_final(
     num_cols: List[str],
     cat_cols: List[str],
     time_budget: int,
+    artifact_prefix: str,
     train_global_start: pd.Timestamp,
     train_global_end: pd.Timestamp,
     test_start: pd.Timestamp,
@@ -315,7 +402,7 @@ def train_and_evaluate_final(
     best = finalize_model(best)
     train_time = float(time.time() - t0)
 
-    model_base = os.path.join(OUT_ARTIFACTS_DIR, f"pycaret_h{h}")
+    model_base = os.path.join(OUT_ARTIFACTS_DIR, f"{artifact_prefix}_h{h}")
     save_model(best, model_base)
 
     open_mask_train = (d_train_g["open_future"] == 1)
@@ -431,68 +518,79 @@ def main() -> None:
     test_start = pd.to_datetime(splits["test"]["start"])
     test_end = pd.to_datetime(splits["test"]["end"])
 
-    results: List[Dict[str, Any]] = []
+    for cfg in get_run_configs():
+        run_tag = str(cfg["tag"])
+        time_budget = int(cfg["time_budget"])
+        metrics_filename = str(cfg["metrics_filename"])
+        artifact_prefix = str(cfg["artifact_prefix"])
 
-    for h in HORIZONS:
-        print(f"\nTraining horizon: {h}")
-        d = build_target_cols(dev, h, target_col=TARGET)
+        print("\n" + "=" * 72)
+        print(f"Run profile: {run_tag} (budget_time={time_budget} minutes)")
+        print("=" * 72)
 
-        fold_wape_scores: List[float] = []
-        for fold_info in val_folds:
-            fold_records = train_and_evaluate_fold(
+        results: List[Dict[str, Any]] = []
+
+        for h in HORIZONS:
+            print(f"\nTraining horizon: {h}")
+            d = build_target_cols(dev, h, target_col=TARGET)
+
+            fold_wape_scores: List[float] = []
+            for fold_info in val_folds:
+                fold_records = train_and_evaluate_fold(
+                    d=d,
+                    h=h,
+                    fold_info=fold_info,
+                    num_cols=NUM_COLS,
+                    cat_cols=CAT_COLS,
+                    time_budget=time_budget,
+                )
+                for rec in fold_records:
+                    results.append(rec)
+                    if rec["agg"] == "macro" and rec["split"] == "val":
+                        fold_wape_scores.append(rec["WAPE"])
+
+            if fold_wape_scores:
+                cv_mean_macro_wape = float(np.mean(fold_wape_scores))
+                print(f"Mean val macro WAPE for h={h}: {cv_mean_macro_wape:.4f}%")
+            else:
+                print(f"No validation folds provided for h={h}")
+
+            final_records = train_and_evaluate_final(
                 d=d,
                 h=h,
-                fold_info=fold_info,
                 num_cols=NUM_COLS,
                 cat_cols=CAT_COLS,
-                time_budget=TIME_BUDGET_PER_RUN,
+                time_budget=time_budget,
+                artifact_prefix=artifact_prefix,
+                train_global_start=train_global_start,
+                train_global_end=train_global_end,
+                test_start=test_start,
+                test_end=test_end,
             )
-            for rec in fold_records:
+            for rec in final_records:
                 results.append(rec)
-                if rec["agg"] == "macro" and rec["split"] == "val":
-                    fold_wape_scores.append(rec["WAPE"])
 
-        if fold_wape_scores:
-            cv_mean_macro_wape = float(np.mean(fold_wape_scores))
-            print(f"Mean val macro WAPE for h={h}: {cv_mean_macro_wape:.4f}%")
-        else:
-            print(f"No validation folds provided for h={h}")
+            print(f"Saved model: {os.path.join(OUT_ARTIFACTS_DIR, f'{artifact_prefix}_h{h}.pkl')}")
 
-        final_records = train_and_evaluate_final(
-            d=d,
-            h=h,
-            num_cols=NUM_COLS,
-            cat_cols=CAT_COLS,
-            time_budget=TIME_BUDGET_PER_RUN,
-            train_global_start=train_global_start,
-            train_global_end=train_global_end,
-            test_start=test_start,
-            test_end=test_end,
+        out = (
+            pd.DataFrame(results)
+            .sort_values(["split", "agg", "horizon", "fold"])
+            .reset_index(drop=True)
         )
-        for rec in final_records:
-            results.append(rec)
+        out_path = os.path.join(OUT_RESULTS_DIR, metrics_filename)
+        out.to_csv(out_path, index=False)
+        print("Saved:", out_path)
 
-        print(f"Saved model: {os.path.join(OUT_ARTIFACTS_DIR, f'pycaret_h{h}.pkl')}")
+        test_macro_df = out[(out["split"] == "test") & (out["agg"] == "macro")]
+        if not test_macro_df.empty:
+            test_mean = float(test_macro_df["WAPE"].mean())
+            print(f"Test mean macro WAPE across horizons: {test_mean:.4f}%")
 
-    out = (
-        pd.DataFrame(results)
-        .sort_values(["split", "agg", "horizon", "fold"])
-        .reset_index(drop=True)
-    )
-    out_path = os.path.join(OUT_RESULTS_DIR, "pycaret_metrics_quick.csv")
-    out.to_csv(out_path, index=False)
-    print("Saved:", out_path)
-
-    test_macro_df = out[(out["split"] == "test") & (out["agg"] == "macro")]
-    if not test_macro_df.empty:
-        test_mean = float(test_macro_df["WAPE"].mean())
-        print(f"Test mean macro WAPE across horizons: {test_mean:.4f}%")
-
-    val_macro_df = out[(out["split"] == "val") & (out["agg"] == "macro")]
-    if not val_macro_df.empty:
-        grouped = val_macro_df.groupby(["fold", "horizon"])["WAPE"].mean()
-        val_mean = float(grouped.mean()) if not grouped.empty else float("nan")
-        print(f"Validation mean macro WAPE across folds: {val_mean:.4f}%")
+        val_macro_df = out[(out["split"] == "val") & (out["agg"] == "macro")]
+        if not val_macro_df.empty:
+            grouped = val_macro_df.groupby(["fold", "horizon"])["WAPE"].mean()
+            val_mean = float(grouped.mean()) if not grouped.empty else float("nan")
+            print(f"Validation mean macro WAPE across folds: {val_mean:.4f}%")
 
 
 if __name__ == "__main__":

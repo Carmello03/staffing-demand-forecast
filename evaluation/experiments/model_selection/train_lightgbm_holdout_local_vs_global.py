@@ -30,7 +30,8 @@ HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
 SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
 
 GLOBAL_ARTIFACTS_DIR = "evaluation/experiments/model_selection/artifacts"
-OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
+OUT_RESULTS_ROOT_DIR = "evaluation/experiments/model_selection/results"
+OUT_RESULTS_DIR = os.path.join(OUT_RESULTS_ROOT_DIR, "holdout_local_vs_global")
 OUT_LOCAL_ARTIFACTS_DIR = os.path.join(GLOBAL_ARTIFACTS_DIR, "lightgbm_local_holdouts")
 
 HORIZONS = [1, 7, 14]

@@ -12,12 +12,46 @@ ARTIFACT_DIR = os.getenv(
     "MODEL_ARTIFACT_DIR",
     os.path.join("..", "..", "evaluation", "experiments", "model_selection", "artifacts"),
 )
-MODEL_ARTIFACT_PREFIX = os.getenv("MODEL_ARTIFACT_PREFIX", "lightgbm")
+MODEL_ARTIFACT_PREFIX = os.getenv("MODEL_ARTIFACT_PREFIX", "autogluon_quick")
 
 _models = None
 _models_lock = Lock()
 _shap_explainers = {}
 _shap_lock = Lock()
+
+
+def _load_autogluon_predictor(path: str):
+    try:
+        from autogluon.tabular import TabularPredictor
+    except Exception as exc:
+        raise ImportError(
+            "AutoGluon predictor requested but autogluon.tabular is not installed."
+        ) from exc
+    return TabularPredictor.load(path, require_version_match=False)
+
+
+def _load_model_for_horizon(horizon: int) -> dict:
+    base = os.path.join(ARTIFACT_DIR, MODEL_ARTIFACT_PREFIX + "_h" + str(horizon))
+    path_joblib = base + ".joblib"
+    path_pkl = base + ".pkl"
+
+    if os.path.exists(path_joblib):
+        return {"kind": "joblib", "model": joblib.load(path_joblib), "path": path_joblib}
+    if os.path.exists(path_pkl):
+        return {"kind": "joblib", "model": joblib.load(path_pkl), "path": path_pkl}
+    if os.path.isdir(base):
+        return {"kind": "autogluon", "model": _load_autogluon_predictor(base), "path": base}
+
+    raise FileNotFoundError(
+        "Missing model artifact for horizon "
+        + str(horizon)
+        + ". Checked: "
+        + path_joblib
+        + ", "
+        + path_pkl
+        + ", "
+        + base
+    )
 
 
 def load_models():
@@ -31,12 +65,24 @@ def load_models():
 
         loaded = {}
         for h in [1, 7, 14]:
-            path = os.path.join(ARTIFACT_DIR, MODEL_ARTIFACT_PREFIX + "_h" + str(h) + ".joblib")
-            if not os.path.exists(path):
-                raise FileNotFoundError("Missing model file: " + path)
-            loaded[h] = joblib.load(path)
+            loaded[h] = _load_model_for_horizon(h)
 
         _models = loaded
+
+
+def _predict_log1p(model_entry: dict, X) -> float:
+    kind = model_entry.get("kind")
+    model_obj = model_entry.get("model")
+
+    if kind == "autogluon":
+        y_log = model_obj.predict(X, as_pandas=False)
+    else:
+        y_log = model_obj.predict(X)
+
+    y_log_arr = np.asarray(y_log, dtype=float).reshape(-1)
+    if y_log_arr.size == 0:
+        raise ValueError("Model returned empty prediction array.")
+    return float(y_log_arr[0])
 
 
 def predict_one(X, horizon: int) -> float:
@@ -45,15 +91,15 @@ def predict_one(X, horizon: int) -> float:
     if horizon not in _models:
         raise ValueError("h must be 1, 7, or 14")
 
-    model_obj = _models[horizon]
-    y_log = model_obj.predict(X)
+    model_entry = _models[horizon]
+    y_log = _predict_log1p(model_entry, X)
 
     y = np.expm1(y_log)
 
-    if y[0] < 0:
+    if y < 0:
         return 0.0
 
-    return float(y[0])
+    return float(y)
 
 
 def _to_dense(X):
@@ -159,9 +205,12 @@ def explain_one(X, horizon: int, top_n: int = 10) -> dict | None:
         return None
 
     load_models()
-    model_obj = _models.get(horizon)
-    if model_obj is None:
+    model_entry = _models.get(horizon)
+    if model_entry is None:
         return None
+    if model_entry.get("kind") != "joblib":
+        return None
+    model_obj = model_entry.get("model")
 
     # LightGBM pipeline path
     pre, estimator = _get_sklearn_pipeline_parts(model_obj)

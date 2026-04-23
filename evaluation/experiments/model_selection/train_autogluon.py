@@ -1,4 +1,4 @@
-"""
+﻿"""
 Rolling-origin AutoGluon training
 
 - rolling time splits
@@ -33,46 +33,51 @@ from training_helper import (
     make_eval_frame_from_open_predictions,
     compute_micro,
     compute_macro,
+    split_train_tune_by_time,
 )
 
 DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
 HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
 SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
-OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
+
+OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results/model_metrics"
 OUT_ARTIFACTS_DIR = "evaluation/experiments/model_selection/artifacts"
 os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
 os.makedirs(OUT_ARTIFACTS_DIR, exist_ok=True)
 
-HORIZONS: List[int] = [1, 7, 14]
+HORIZONS = [1, 7, 14]
 TARGET = "Customers"
+SEED = 42
+GAP_DAYS = 28
+TUNE_DAYS = 42
 
-TIME_BUDGET_PER_RUN: int = 1200
+RUN_BOTH_LONG_AND_QUICK = True
 
-# AutoGluon fast + avoid internal CV leakage
+# Full vs quick budgets per horizon run (seconds).
+LONG_TIME_BUDGET_PER_RUN = 1200
+QUICK_TIME_BUDGET_PER_RUN = 300
+
 PRESETS = "medium_quality"
 NUM_BAG_FOLDS = 0
 NUM_STACK_LEVELS = 0
 
-TUNE_DAYS = 42
 
-def split_train_tune_by_time(d_train_all: pd.DataFrame, tune_days: int, gap_days: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    max_date = d_train_all["Date"].max()
-    tune_end = max_date
-    tune_start = tune_end - pd.Timedelta(days=tune_days - 1)
-
-    inner_train_end = tune_start - pd.Timedelta(days=gap_days + 1)
-
-    d_tune = d_train_all[(d_train_all["Date"] >= tune_start) & (d_train_all["Date"] <= tune_end)].copy()
-    d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
-
-    if d_inner.empty:
-        inner_train_end = tune_start - pd.Timedelta(days=1)
-        d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
-
-    if d_tune.empty:
-        d_tune = d_train_all.copy()
-
-    return d_inner, d_tune
+def get_run_configs() -> List[Dict[str, Any]]:
+    long_cfg = {
+        "tag": "long",
+        "time_budget": LONG_TIME_BUDGET_PER_RUN,
+        "metrics_filename": "autogluon_metrics.csv",
+        "artifact_prefix": "autogluon",
+    }
+    quick_cfg = {
+        "tag": "quick",
+        "time_budget": QUICK_TIME_BUDGET_PER_RUN,
+        "metrics_filename": "autogluon_metrics_quick.csv",
+        "artifact_prefix": "autogluon_quick",
+    }
+    if RUN_BOTH_LONG_AND_QUICK:
+        return [long_cfg, quick_cfg]
+    return [long_cfg]
 
 
 def train_and_evaluate_fold(
@@ -84,9 +89,9 @@ def train_and_evaluate_fold(
     time_budget: int,
     gap_days: int,
     tune_days: int,
+    run_tag: str,
 ) -> List[Dict[str, Any]]:
     
-    # Train AutoGluon on one fold and return micro+macro metric rows.
     fold_idx = fold_info.get("fold", "")
     val_start = pd.to_datetime(fold_info["val"]["start"])
     val_end = pd.to_datetime(fold_info["val"]["end"])
@@ -124,7 +129,7 @@ def train_and_evaluate_fold(
     tune_df["y_log"] = np.log1p(tune_df["y"].to_numpy(dtype=float))
     tune_df = tune_df.drop(columns=["y"])
 
-    fold_path = os.path.join(OUT_ARTIFACTS_DIR, f"_autogluon_tmp_h{h}_fold{fold_idx}")
+    fold_path = os.path.join(OUT_ARTIFACTS_DIR, f"_autogluon_tmp_{run_tag}_h{h}_fold{fold_idx}")
     shutil.rmtree(fold_path, ignore_errors=True)
 
     predictor = TabularPredictor(
@@ -132,6 +137,7 @@ def train_and_evaluate_fold(
         problem_type="regression",
         eval_metric="mae",
         path=fold_path,
+        learner_kwargs={"random_state": SEED},
     )
 
     t0 = time.perf_counter()
@@ -155,7 +161,6 @@ def train_and_evaluate_fold(
     train_micro_metrics = compute_micro(train_eval)
     train_macro_metrics = compute_macro(train_eval)
 
-    # Predict only on open rows in val window
     X_val_open = d_val_open[feature_cols]
     yhat_open_log = predictor.predict(X_val_open, as_pandas=False)
     yhat_open = np.expm1(np.asarray(yhat_open_log, dtype=float))
@@ -165,7 +170,6 @@ def train_and_evaluate_fold(
     micro_metrics = compute_micro(val_eval)
     macro_metrics = compute_macro(val_eval)
 
-    # Clean up fold artifacts
     shutil.rmtree(fold_path, ignore_errors=True)
 
     records: List[Dict[str, Any]] = []
@@ -238,13 +242,13 @@ def train_and_evaluate_final(
     num_cols: List[str],
     cat_cols: List[str],
     time_budget: int,
+    artifact_prefix: str,
     train_global_start: pd.Timestamp,
     train_global_end: pd.Timestamp,
     test_start: pd.Timestamp,
     test_end: pd.Timestamp,
 ) -> List[Dict[str, Any]]:
     
-    # Train AutoGluon on global train window and evaluate on fixed test window
     d_train_global = filter_issue_window(d, train_global_start, train_global_end)
     d_test = filter_issue_window(d, test_start, test_end)
 
@@ -263,7 +267,7 @@ def train_and_evaluate_final(
     train_df["y_log"] = np.log1p(train_df["y"].to_numpy(dtype=float))
     train_df = train_df.drop(columns=["y"])
 
-    model_path = os.path.join(OUT_ARTIFACTS_DIR, f"autogluon_h{h}")
+    model_path = os.path.join(OUT_ARTIFACTS_DIR, f"{artifact_prefix}_h{h}")
     shutil.rmtree(model_path, ignore_errors=True)
 
     predictor = TabularPredictor(
@@ -271,6 +275,7 @@ def train_and_evaluate_final(
         problem_type="regression",
         eval_metric="mae",
         path=model_path,
+        learner_kwargs={"random_state": SEED},
     )
 
     t0 = time.perf_counter()
@@ -294,7 +299,6 @@ def train_and_evaluate_final(
     micro_train = compute_micro(train_eval)
     macro_train = compute_macro(train_eval)
 
-    # Predict on open rows in test window
     open_mask_test = (d_test["open_future"] == 1)
     X_test_open = d_test.loc[open_mask_test, feature_cols]
     yhat_open_log = predictor.predict(X_test_open, as_pandas=False) if len(X_test_open) else np.array([])
@@ -392,70 +396,82 @@ def main() -> None:
 
     gap_days = int(splits.get("meta", {}).get("GAP_DAYS", 28))
 
-    results: List[Dict[str, Any]] = []
+    for cfg in get_run_configs():
+        run_tag = str(cfg["tag"])
+        time_budget = int(cfg["time_budget"])
+        metrics_filename = str(cfg["metrics_filename"])
+        artifact_prefix = str(cfg["artifact_prefix"])
 
-    for h in HORIZONS:
-        print(f"\nTraining horizon: {h}")
-        d = build_target_cols(dev, h, target_col=TARGET)
+        print("\n" + "=" * 72)
+        print(f"Run profile: {run_tag} (time_budget={time_budget}s)")
+        print("=" * 72)
 
-        fold_wape_scores: List[float] = []
-        for fold_info in val_folds:
-            fold_records = train_and_evaluate_fold(
+        results: List[Dict[str, Any]] = []
+
+        for h in HORIZONS:
+            print(f"\nTraining horizon: {h}")
+            d = build_target_cols(dev, h, target_col=TARGET)
+
+            fold_wape_scores: List[float] = []
+            for fold_info in val_folds:
+                fold_records = train_and_evaluate_fold(
+                    d=d,
+                    h=h,
+                    fold_info=fold_info,
+                    num_cols=NUM_COLS,
+                    cat_cols=CAT_COLS,
+                    time_budget=time_budget,
+                    gap_days=gap_days,
+                    tune_days=TUNE_DAYS,
+                    run_tag=run_tag,
+                )
+                for rec in fold_records:
+                    results.append(rec)
+                    if rec["agg"] == "macro" and rec["split"] == "val":
+                        fold_wape_scores.append(rec["WAPE"])
+
+            if fold_wape_scores:
+                cv_mean_macro_wape = float(np.mean(fold_wape_scores))
+                print(f"Mean val macro WAPE for h={h}: {cv_mean_macro_wape:.4f}%")
+            else:
+                print(f"No validation folds provided for h={h}")
+
+            final_records = train_and_evaluate_final(
                 d=d,
                 h=h,
-                fold_info=fold_info,
                 num_cols=NUM_COLS,
                 cat_cols=CAT_COLS,
-                time_budget=TIME_BUDGET_PER_RUN,
-                gap_days=gap_days,
-                tune_days=TUNE_DAYS,
+                time_budget=time_budget,
+                artifact_prefix=artifact_prefix,
+                train_global_start=train_global_start,
+                train_global_end=train_global_end,
+                test_start=test_start,
+                test_end=test_end,
             )
-            for rec in fold_records:
+            for rec in final_records:
                 results.append(rec)
-                if rec["agg"] == "macro" and rec["split"] == "val":
-                    fold_wape_scores.append(rec["WAPE"])
 
-        if fold_wape_scores:
-            cv_mean_macro_wape = float(np.mean(fold_wape_scores))
-            print(f"Mean val macro WAPE for h={h}: {cv_mean_macro_wape:.4f}%")
-        else:
-            print(f"No validation folds provided for h={h}")
+            print(f"Saved model: {os.path.join(OUT_ARTIFACTS_DIR, f'{artifact_prefix}_h{h}')}")
 
-        final_records = train_and_evaluate_final(
-            d=d,
-            h=h,
-            num_cols=NUM_COLS,
-            cat_cols=CAT_COLS,
-            time_budget=TIME_BUDGET_PER_RUN,
-            train_global_start=train_global_start,
-            train_global_end=train_global_end,
-            test_start=test_start,
-            test_end=test_end,
+        out = (
+            pd.DataFrame(results)
+            .sort_values(["split", "agg", "horizon", "fold"])
+            .reset_index(drop=True)
         )
-        for rec in final_records:
-            results.append(rec)
+        out_path = os.path.join(OUT_RESULTS_DIR, metrics_filename)
+        out.to_csv(out_path, index=False)
+        print("Saved:", out_path)
 
-        print(f"Saved model: {os.path.join(OUT_ARTIFACTS_DIR, f'autogluon_h{h}')}")
+        test_macro_df = out[(out["split"] == "test") & (out["agg"] == "macro")]
+        if not test_macro_df.empty:
+            test_mean = float(test_macro_df["WAPE"].mean())
+            print(f"Test mean macro WAPE across horizons: {test_mean:.4f}%")
 
-    out = (
-        pd.DataFrame(results)
-        .sort_values(["split", "agg", "horizon", "fold"])
-        .reset_index(drop=True)
-    )
-    out_path = os.path.join(OUT_RESULTS_DIR, "autogluon_metrics.csv")
-    out.to_csv(out_path, index=False)
-    print("Saved:", out_path)
-
-    test_macro_df = out[(out["split"] == "test") & (out["agg"] == "macro")]
-    if not test_macro_df.empty:
-        test_mean = float(test_macro_df["WAPE"].mean())
-        print(f"Test mean macro WAPE across horizons: {test_mean:.4f}%")
-
-    val_macro_df = out[(out["split"] == "val") & (out["agg"] == "macro")]
-    if not val_macro_df.empty:
-        grouped = val_macro_df.groupby(["fold", "horizon"])["WAPE"].mean()
-        val_mean = float(grouped.mean()) if not grouped.empty else float("nan")
-        print(f"Validation mean macro WAPE across folds: {val_mean:.4f}%")
+        val_macro_df = out[(out["split"] == "val") & (out["agg"] == "macro")]
+        if not val_macro_df.empty:
+            grouped = val_macro_df.groupby(["fold", "horizon"])["WAPE"].mean()
+            val_mean = float(grouped.mean()) if not grouped.empty else float("nan")
+            print(f"Validation mean macro WAPE across folds: {val_mean:.4f}%")
 
 
 if __name__ == "__main__":

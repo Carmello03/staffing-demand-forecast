@@ -45,3 +45,12 @@ data/processed/
 experiments/model_selection/artifacts/
 experiments/model_selection/automl/
 experiments/model_selection/archive/
+
+# Local evaluation environment/artifacts
+.venv-eval/
+catboost_info/
+catboost_*/
+evaluation/data/raw/
+evaluation/data/processed/
+evaluation/data/holdout_stores/uploads/
+evaluation/experiments/model_selection/artifacts/

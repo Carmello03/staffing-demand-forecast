@@ -1,5 +1,4 @@
-
-# Shared helper functions for rolling evaluation and model training
+﻿
 
 from __future__ import annotations
 
@@ -23,8 +22,33 @@ CAT_COLS: List[str] = [
 FEATURE_COLS: List[str] = NUM_COLS + CAT_COLS
 
 
+def split_train_tune_by_time(d_train_all: pd.DataFrame, tune_days: int, gap_days: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split a training window into an inner-train block and a tune block.
+
+    The most recent tune_days rows form the tune set. The remaining rows,
+    minus an embargo of gap_days before the tune start, form the inner-train
+    set. If the tune set is empty the full window is used as the tune set.
+    """
+    max_date = d_train_all["Date"].max()
+    tune_end = max_date
+    tune_start = tune_end - pd.Timedelta(days=tune_days - 1)
+
+    inner_train_end = tune_start - pd.Timedelta(days=gap_days + 1)
+
+    d_tune = d_train_all[(d_train_all["Date"] >= tune_start) & (d_train_all["Date"] <= tune_end)].copy()
+    d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
+
+    if d_inner.empty:
+        inner_train_end = tune_start - pd.Timedelta(days=1)
+        d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
+
+    if d_tune.empty:
+        d_tune = d_train_all.copy()
+
+    return d_inner, d_tune
+
+
 def dedupe_list(items: List[str]) -> List[str]:
-    # Return a list with duplicates removed
     seen = set()
     out = []
     for item in items:
@@ -34,27 +58,22 @@ def dedupe_list(items: List[str]) -> List[str]:
     return out
 
 def add_features_per_store(g: pd.DataFrame, target_col: str = "Customers") -> pd.DataFrame:
-    # Create time‑based and lag features for a single store
     g = g.sort_values("Date").copy()
 
-    # Calendar and weekend features
     g["month"] = g["Date"].dt.month
     g["year"] = g["Date"].dt.year
     g["weekofyear"] = g["Date"].dt.isocalendar().week.astype(int)
     g["is_weekend"] = (g["DayOfWeek"] >= 6).astype(int)
 
-    # Cyclical encodings
     g["dow_sin"] = np.sin(2 * np.pi * g["DayOfWeek"] / 7.0)
     g["dow_cos"] = np.cos(2 * np.pi * g["DayOfWeek"] / 7.0)
     g["month_sin"] = np.sin(2 * np.pi * g["month"] / 12.0)
     g["month_cos"] = np.cos(2 * np.pi * g["month"] / 12.0)
 
-    # Lag features
     g["lag1"] = g[target_col].shift(1)
     g["lag7"] = g[target_col].shift(7)
     g["lag14"] = g[target_col].shift(14)
 
-    # Rolling mean features 
     shifted = g[target_col].shift(1)
     g["roll7_mean"] = shifted.rolling(7).mean()
     g["roll14_mean"] = shifted.rolling(14).mean()
@@ -65,16 +84,13 @@ def add_features_per_store(g: pd.DataFrame, target_col: str = "Customers") -> pd
 def build_target_cols(df: pd.DataFrame, h: int, target_col: str = "Customers") -> pd.DataFrame:
     out = df.copy()
 
-    # Target and open/closed on the day we are predicting (t+h)
     out["y"] = out.groupby("Store")[target_col].shift(-h)
     out["open_future"] = out.groupby("Store")["Open"].shift(-h)
 
-    # Align schedule features them to the target day (t+h)
     out["SchoolHoliday"] = out.groupby("Store")["SchoolHoliday"].shift(-h)
     out["StateHoliday"] = out.groupby("Store")["StateHoliday"].shift(-h)
     out["Promo"] = out.groupby("Store")["Promo"].shift(-h)
 
-    # Calendar features should describe the target day (Date + h)
     target_date = out["Date"] + pd.to_timedelta(h, unit="D")
 
     out["DayOfWeek"] = target_date.dt.dayofweek + 1
@@ -91,11 +107,9 @@ def build_target_cols(df: pd.DataFrame, h: int, target_col: str = "Customers") -
     return out
 
 def filter_issue_window(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
-    # Return a slice of df between issue dates start_date and end_date
     return df.loc[(df["Date"] >= start_date) & (df["Date"] <= end_date)].copy()
 
 def filter_issue_ranges(df: pd.DataFrame, ranges: List[dict]) -> pd.DataFrame:
-    # Return concatenated slices of df for multiple [start,end] issue-date ranges
     parts: List[pd.DataFrame] = []
     for r in ranges:
         start = pd.to_datetime(r["start"])
@@ -107,7 +121,6 @@ def filter_issue_ranges(df: pd.DataFrame, ranges: List[dict]) -> pd.DataFrame:
     return out
 
 def fill_missing_values(df: pd.DataFrame, num_cols: List[str] | None = None, cat_cols: List[str] | None = None) -> pd.DataFrame:
-    # Fill missing values in numeric and categorical columns
     if num_cols is None:
         num_cols = NUM_COLS
     if cat_cols is None:
@@ -119,7 +132,6 @@ def fill_missing_values(df: pd.DataFrame, num_cols: List[str] | None = None, cat
 
 
 def make_eval_frame_from_open_predictions(df_window: pd.DataFrame, yhat_open: np.ndarray) -> pd.DataFrame:
-    # Construct an evaluation frame with closed‑day prediction rule applied (yhat=0 when open_future=0)
     eval_df = df_window[["Store", "y", "open_future"]].copy()
     eval_df["yhat"] = 0.0
     open_mask = eval_df["open_future"] == 1
@@ -130,7 +142,6 @@ def make_eval_frame_from_open_predictions(df_window: pd.DataFrame, yhat_open: np
     return eval_df
 
 def wape_percent(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    # Weighted absolute percentage error in percentage
     denom = float(np.sum(y_true))
     if denom == 0.0:
         return 0.0
@@ -138,22 +149,18 @@ def wape_percent(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    # Mean absolute error 
     return float(np.mean(np.abs(y_true - y_pred)))
 
 
 def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    # Root mean squared error   
     return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
 
 def bias_mean_signed_error(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    # Mean signed error with positive values mean underprediction and negative values meaning overprediction
     return float(np.mean(y_true - y_pred))
 
 
 def compute_micro(df_eval: pd.DataFrame) -> dict:
-    # Compute thesis‑aligned micro metrics on an evaluation data
     if df_eval.empty:
         return {
             "MAE": float("nan"), "RMSE": float("nan"), "WAPE": float("nan"),
@@ -178,7 +185,6 @@ def compute_micro(df_eval: pd.DataFrame) -> dict:
 
 
 def compute_macro(df_eval: pd.DataFrame) -> dict:
-    # Compute thesis‑aligned macro metrics on an evaluation daat by averaging store‑level metrics
     if df_eval.empty:
         return {
             "MAE": float("nan"), "RMSE": float("nan"), "WAPE": float("nan"),
@@ -242,10 +248,8 @@ def save_feature_importance(pipe, out_path, kind="auto"):
     else:
         raise ValueError("kind must be 'auto', 'coef', or 'importance'.")
 
-    # Remove store dummy variables
     imp_df = imp_df[~imp_df["feature"].str.contains("Store")]
 
-    # keep top 30 most important
     imp_df = imp_df.head(30)
 
     imp_df.to_csv(out_path, index=False)

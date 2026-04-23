@@ -36,13 +36,14 @@ from training_helper import (
     make_eval_frame_from_open_predictions,
     compute_micro,
     compute_macro,
+    split_train_tune_by_time,
 )
 
 DATA_PATH = "evaluation/data/processed/panel_train_clean.csv"
 HOLDOUT_PATH = "evaluation/data/splits/holdout_stores.csv"
 SPLITS_PATH = "evaluation/data/splits/time_splits_purged_kfold.json"
 
-OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results"
+OUT_RESULTS_DIR = "evaluation/experiments/model_selection/results/model_metrics"
 OUT_ARTIFACTS_DIR = "evaluation/experiments/model_selection/artifacts"
 os.makedirs(OUT_RESULTS_DIR, exist_ok=True)
 os.makedirs(OUT_ARTIFACTS_DIR, exist_ok=True)
@@ -50,25 +51,8 @@ os.makedirs(OUT_ARTIFACTS_DIR, exist_ok=True)
 HORIZONS = [1, 7, 14]
 TARGET = "Customers"
 SEED = 42
-
+GAP_DAYS = 28
 TUNE_DAYS = 42
-
-
-def split_train_tune_by_time(d_train_all: pd.DataFrame, tune_days: int, gap_days: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    max_date = d_train_all["Date"].max()
-    tune_end = max_date
-    tune_start = tune_end - pd.Timedelta(days=tune_days - 1)
-
-    inner_train_end = tune_start - pd.Timedelta(days=gap_days + 1)
-
-    d_tune = d_train_all[(d_train_all["Date"] >= tune_start) & (d_train_all["Date"] <= tune_end)].copy()
-    d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
-
-    if d_inner.empty:
-        inner_train_end = tune_start - pd.Timedelta(days=1)
-        d_inner = d_train_all[d_train_all["Date"] <= inner_train_end].copy()
-
-    return d_inner, d_tune
 
 
 def main() -> None:
