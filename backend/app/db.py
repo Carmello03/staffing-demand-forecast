@@ -13,6 +13,8 @@ from holiday_service import (
 
 STORE_META_FIELD = "store_meta"
 FIRESTORE_TIMEOUT_SECONDS = float(os.getenv("FIRESTORE_TIMEOUT_SECONDS", "20"))
+MAX_UPLOAD_MB = float(os.getenv("MAX_UPLOAD_MB", "5"))
+MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB * 1024 * 1024)
 
 
 def _firestore_call_kwargs() -> dict:
@@ -21,6 +23,15 @@ def _firestore_call_kwargs() -> dict:
 
 def _init():
     init_firebase_app()
+
+
+def _read_upload_with_size_limit(file_obj) -> bytes:
+    content = file_obj.file.read(MAX_UPLOAD_BYTES + 1)
+    if not content:
+        raise ValueError("Empty file")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise ValueError(f"File too large. Max upload size is {MAX_UPLOAD_MB:g} MB.")
+    return content
 
 
 def list_stores(uid: str):
@@ -57,9 +68,7 @@ def upload_store_days_csv(store_id: str, file) -> dict:
     _init()
     db = firestore.client()
 
-    content = file.file.read()
-    if not content:
-        raise ValueError("Empty file")
+    content = _read_upload_with_size_limit(file)
 
     df = pd.read_csv(pd.io.common.BytesIO(content))
 

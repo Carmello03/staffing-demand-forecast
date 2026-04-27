@@ -2,6 +2,7 @@ import os
 from threading import Lock
 import joblib
 import numpy as np
+import sklearn.compose._column_transformer as sklearn_column_transformer
 try:
     import shap
 except Exception:
@@ -12,7 +13,7 @@ ARTIFACT_DIR = os.getenv(
     "MODEL_ARTIFACT_DIR",
     os.path.join("..", "..", "evaluation", "experiments", "model_selection", "artifacts"),
 )
-MODEL_ARTIFACT_PREFIX = os.getenv("MODEL_ARTIFACT_PREFIX", "autogluon_quick")
+MODEL_ARTIFACT_PREFIX = os.getenv("MODEL_ARTIFACT_PREFIX", "lightgbm")
 
 _models = None
 _models_lock = Lock()
@@ -20,17 +21,20 @@ _shap_explainers = {}
 _shap_lock = Lock()
 
 
-def _load_autogluon_predictor(path: str):
-    try:
-        from autogluon.tabular import TabularPredictor
-    except Exception as exc:
-        raise ImportError(
-            "AutoGluon predictor requested but autogluon.tabular is not installed."
-        ) from exc
-    return TabularPredictor.load(path, require_version_match=False)
+def _add_sklearn_pickle_compat() -> None:
+    # Compatibility shim for artifacts saved with sklearn versions that expose
+    # private ColumnTransformer helper classes differently.
+    if hasattr(sklearn_column_transformer, "_RemainderColsList"):
+        return
+
+    class _RemainderColsList(list):
+        pass
+
+    sklearn_column_transformer._RemainderColsList = _RemainderColsList
 
 
 def _load_model_for_horizon(horizon: int) -> dict:
+    _add_sklearn_pickle_compat()
     base = os.path.join(ARTIFACT_DIR, MODEL_ARTIFACT_PREFIX + "_h" + str(horizon))
     path_joblib = base + ".joblib"
     path_pkl = base + ".pkl"
@@ -39,8 +43,6 @@ def _load_model_for_horizon(horizon: int) -> dict:
         return {"kind": "joblib", "model": joblib.load(path_joblib), "path": path_joblib}
     if os.path.exists(path_pkl):
         return {"kind": "joblib", "model": joblib.load(path_pkl), "path": path_pkl}
-    if os.path.isdir(base):
-        return {"kind": "autogluon", "model": _load_autogluon_predictor(base), "path": base}
 
     raise FileNotFoundError(
         "Missing model artifact for horizon "
@@ -71,13 +73,8 @@ def load_models():
 
 
 def _predict_log1p(model_entry: dict, X) -> float:
-    kind = model_entry.get("kind")
     model_obj = model_entry.get("model")
-
-    if kind == "autogluon":
-        y_log = model_obj.predict(X, as_pandas=False)
-    else:
-        y_log = model_obj.predict(X)
+    y_log = model_obj.predict(X)
 
     y_log_arr = np.asarray(y_log, dtype=float).reshape(-1)
     if y_log_arr.size == 0:

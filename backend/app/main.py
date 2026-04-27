@@ -25,6 +25,7 @@ from db import (
     verify_store_owner, write_day_rows,
 )
 from forecast_service import predict_for_requested_horizon
+from model import load_models, ARTIFACT_DIR, MODEL_ARTIFACT_PREFIX
 from holiday_service import (
     build_holiday_context_by_horizon,
     normalize_country_iso,
@@ -37,21 +38,34 @@ FORECAST_HISTORY_DAYS = int(os.getenv("FORECAST_HISTORY_DAYS", "60"))
 EXPLANATION_CACHE_VERSION = "exp3"
 FORECAST_CACHE_VERSION = os.getenv("FORECAST_CACHE_VERSION", "fc3")
 
-# Simple CORS setup for local frontend development.
-cors_origins_env = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
-)
+dev_mode_enabled = os.getenv("DEV_MODE") == "1"
+local_cors_default = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
+cors_origins_env = os.getenv("CORS_ORIGINS", local_cors_default if dev_mode_enabled else "")
 cors_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+cors_origin_regex = r"https?://(localhost|127\.0\.0\.1)(:\d+)?" if dev_mode_enabled else None
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origin_regex=cors_origin_regex,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.get("/health")
+def health():
+    try:
+        load_models()
+        return {
+            "status": "ok",
+            "model_artifact_prefix": os.getenv("MODEL_ARTIFACT_PREFIX", MODEL_ARTIFACT_PREFIX),
+            "model_artifact_dir": os.getenv("MODEL_ARTIFACT_DIR", ARTIFACT_DIR),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Model health check failed: {exc}") from exc
+
 
 class StoreIn(BaseModel):
     store_name: str
