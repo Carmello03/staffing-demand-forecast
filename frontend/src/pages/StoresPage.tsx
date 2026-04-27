@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+﻿import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { Card } from "../components/Card";
 import { InlineAlert } from "../components/InlineAlert";
@@ -8,7 +8,7 @@ import { createStore, getStoreStatus } from "../lib/api";
 import type { StoreStatus } from "../types";
 
 function ReadinessBadge({ status }: { status: StoreStatus | undefined }) {
-  if (!status) return <span className="text-xs text-slate-400">—</span>;
+  if (!status) return <span className="text-xs text-slate-400">-</span>;
   if (status.ready_to_forecast) {
     return <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Ready</span>;
   }
@@ -140,3 +140,4 @@ export function StoresPage() {
     </div>
   );
 }
+

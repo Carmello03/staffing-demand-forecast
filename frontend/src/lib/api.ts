@@ -11,9 +11,9 @@
   StoreStatus,
   UploadResponse,
 } from "../types";
+import { auth } from "./firebase";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-export const TOKEN_STORAGE_KEY = "firebase_id_token";
 
 export class ApiError extends Error {
   status: number;
@@ -25,12 +25,19 @@ export class ApiError extends Error {
   }
 }
 
-function getStoredToken() {
-  return localStorage.getItem(TOKEN_STORAGE_KEY);
+async function getAuthToken(): Promise<string | null> {
+  try {
+    if (!auth.currentUser) {
+      return null;
+    }
+    return await auth.currentUser.getIdToken();
+  } catch {
+    return null;
+  }
 }
 
-function buildAuthHeaders(options: RequestInit, includeJsonContentType = true) {
-  const token = getStoredToken();
+async function buildAuthHeaders(options: RequestInit, includeJsonContentType = true) {
+  const token = await getAuthToken();
   const headers = new Headers(options.headers ?? {});
   const isFormData = options.body instanceof FormData;
 
@@ -67,7 +74,7 @@ async function request<T>(path: string, options: RequestInit = {}) {
     throw new Error("VITE_API_BASE_URL is missing.");
   }
 
-  const headers = buildAuthHeaders(options);
+  const headers = await buildAuthHeaders(options);
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -89,9 +96,10 @@ async function requestRaw(path: string, options: RequestInit = {}) {
     throw new Error("VITE_API_BASE_URL is missing.");
   }
 
+  const headers = await buildAuthHeaders(options, false);
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
-    headers: buildAuthHeaders(options, false),
+    headers,
   });
 
   if (!response.ok) {

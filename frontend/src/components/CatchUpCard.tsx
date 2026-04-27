@@ -1,6 +1,7 @@
-﻿import { useState, useMemo, type ChangeEvent } from "react";
+﻿import { useMemo, useState, type ChangeEvent } from "react";
 import { downloadCatchUpTemplate, postCatchUp, uploadStoreCsv } from "../lib/api";
 import type { CatchUpDayIn, StoreStatus } from "../types";
+import { formatIsoDateLocal, parseIsoDateLocal, weekdayFromIsoLocal } from "../utils/date";
 import { InlineAlert } from "./InlineAlert";
 
 type Props = {
@@ -18,16 +19,22 @@ type DayRow = {
 };
 
 function toWeekday(dateStr: string) {
-  return new Date(`${dateStr}T00:00:00`).toLocaleDateString(undefined, { weekday: "long" });
+  return weekdayFromIsoLocal(dateStr);
 }
 
 function buildMissingDates(lastUploaded: string, currentDate: string): string[] {
+  const startDate = parseIsoDateLocal(lastUploaded);
+  const endDate = parseIsoDateLocal(currentDate);
+  if (!startDate || !endDate) {
+    return [];
+  }
+
   const dates: string[] = [];
-  const end = new Date(`${currentDate}T00:00:00`);
-  const cursor = new Date(`${lastUploaded}T00:00:00`);
+  const end = new Date(endDate);
+  const cursor = new Date(startDate);
   cursor.setDate(cursor.getDate() + 1);
   while (cursor <= end) {
-    dates.push(cursor.toISOString().slice(0, 10));
+    dates.push(formatIsoDateLocal(cursor));
     cursor.setDate(cursor.getDate() + 1);
   }
   return dates;
@@ -299,4 +306,3 @@ export function CatchUpCard({ storeId, status, onComplete }: Props) {
     </div>
   );
 }
-

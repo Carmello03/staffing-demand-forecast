@@ -30,7 +30,7 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(
-    localStorage.getItem(TOKEN_STORAGE_KEY),
+     localStorage.getItem(TOKEN_STORAGE_KEY),
   );
   const [isInitializing, setIsInitializing] = useState(true);
 

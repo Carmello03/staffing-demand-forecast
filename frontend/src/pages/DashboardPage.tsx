@@ -25,6 +25,7 @@ import {
 } from "../utils/forecastSessionCache";
 import { readSelectedStoreId, resolveStoreId, saveSelectedStoreId } from "../utils/storeSelection";
 import { clampK, formatShare, getNetDirection } from "../utils/ui";
+import { formatIsoDateLocal, parseIsoDateLocal } from "../utils/date";
 
 type ForecastStats = {
   availableCount: number;
@@ -61,7 +62,7 @@ function exportForecastCSV(rows: ReturnType<typeof buildNextKRows>, storeName: s
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `forecast-${storeName.replace(/\s+/g, "-")}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `forecast-${storeName.replace(/\s+/g, "-")}-${formatIsoDateLocal(new Date())}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -121,13 +122,13 @@ export function DashboardPage() {
   );
 
   const planningRows = useMemo(() => {
-    const source = status?.current_date ? new Date(`${status.current_date}T00:00:00`) : new Date();
-    const base = Number.isNaN(source.getTime()) ? new Date() : source;
+    const source = status?.current_date ? parseIsoDateLocal(status.current_date) : new Date();
+    const base = source && !Number.isNaN(source.getTime()) ? source : new Date();
     return Array.from({ length: k }, (_, index) => {
       const day = index + 1;
       const target = new Date(base);
       target.setDate(base.getDate() + day);
-      const targetDate = target.toISOString().slice(0, 10);
+      const targetDate = formatIsoDateLocal(target);
       const weekday = target.toLocaleDateString(undefined, { weekday: "long" });
       return { day, targetDate, weekday };
     });

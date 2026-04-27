@@ -35,7 +35,7 @@ npm run preview
 ## Notes
 
 - Login uses Firebase email/password auth.
-- Firebase ID token is stored in `localStorage` and automatically attached as:
+- Firebase ID token is resolved from Firebase Auth at request time and attached as:
   - `Authorization: Bearer <token>`
 - Implemented routes:
   - `/login`
@@ -43,4 +43,6 @@ npm run preview
   - `/stores`
   - `/upload`
   - `/store/:storeId`
+- For Firebase Hosting SPA deploys, `frontend/firebase.json` includes a catch-all rewrite to `/index.html` so deep links do not 404.
+  - Deploy from the `frontend` directory with: `firebase deploy --only hosting --config firebase.json`
 - Forecast preview tables intentionally show values only where backend horizons exist (`h=1/7/14`) and render `-` for the rest with a "More horizons coming" note.

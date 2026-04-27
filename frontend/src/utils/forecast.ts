@@ -1,14 +1,19 @@
 ﻿import type { ForecastExplanation, ForecastResponse } from "../types";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 export type ForecastMap = Partial<Record<number, ForecastResponse>>;
 
 function toIsoDate(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function toWeekday(dateIso: string) {
-  const dt = new Date(dateIso);
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateIso);
+  const dt = parts
+    ? new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))
+    : new Date(dateIso);
   if (Number.isNaN(dt.getTime())) {
     return "";
   }
@@ -19,7 +24,10 @@ export function formatDate(value: string | null | undefined) {
   if (!value) {
     return "N/A";
   }
-  const dt = new Date(value);
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const dt = parts
+    ? new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))
+    : new Date(value);
   if (Number.isNaN(dt.getTime())) {
     return value;
   }
@@ -44,11 +52,16 @@ export function getIssueDate(forecasts: ForecastMap) {
 
 export function buildNextKRows(k: number, forecasts: ForecastMap) {
   const issueDate = getIssueDate(forecasts);
-  const issueDateTime = issueDate ? new Date(issueDate).getTime() : Date.now();
+  const issueDateBase = issueDate && /^\d{4}-\d{2}-\d{2}$/.test(issueDate) ? issueDate : toIsoDate(new Date());
 
   return Array.from({ length: k }, (_, index) => {
     const day = index + 1;
-    const targetDate = toIsoDate(new Date(issueDateTime + day * DAY_MS));
+    const baseParts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(issueDateBase);
+    const base = baseParts
+      ? new Date(Number(baseParts[1]), Number(baseParts[2]) - 1, Number(baseParts[3]))
+      : new Date();
+    base.setDate(base.getDate() + day);
+    const targetDate = toIsoDate(base);
     const horizonForecast = forecasts[day];
     const holidayNote = getHolidayNote(horizonForecast);
 
