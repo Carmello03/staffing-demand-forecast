@@ -1,0 +1,18 @@
+# Dedicated dependencies for evaluation / experiment scripts only.
+# Keep backend dependencies separate in backend/app/requirements.txt.
+#
+# Python: 3.11
+
+numpy==1.26.4
+pandas==2.1.4
+joblib==1.3.2
+scikit-learn==1.4.2
+scipy==1.11.4
+
+lightgbm==4.6.0
+xgboost==2.0.3
+flaml==2.3.6
+ray[tune]==2.44.1
+catboost==1.2.8
+autogluon.tabular==1.4.0
+pycaret==3.3.2

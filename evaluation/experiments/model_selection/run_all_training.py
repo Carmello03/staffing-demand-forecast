@@ -7,11 +7,13 @@ from datetime import datetime
 SCRIPTS = [
     Path("evaluation/experiments/model_selection/baseline_metrics.py"),
     Path("evaluation/experiments/model_selection/train_linear_regression.py"),
-    Path("evaluation/experiments/model_selection/train_lightgbm.py"),
     Path("evaluation/experiments/model_selection/train_xgboost.py"),
-    Path("evaluation/experiments/model_selection/train_flaml.py"),
+    Path("evaluation/experiments/model_selection/train_lightgbm.py"),
     Path("evaluation/experiments/model_selection/train_autogluon.py"),
+    Path("evaluation/experiments/model_selection/train_flaml.py"),
     Path("evaluation/experiments/model_selection/train_pycaret.py"),
+    Path("evaluation/experiments/model_selection/seed_variance.py"),
+    Path("evaluation/experiments/model_selection/evaluate_models.py"),
 ]
 
 LOG_DIR = Path("evaluation/experiments/model_selection/logs")

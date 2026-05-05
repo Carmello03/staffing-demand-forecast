@@ -13,7 +13,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { TOKEN_STORAGE_KEY } from "../lib/api";
 import { clearSelectedStoreId } from "../utils/storeSelection";
 import { auth } from "../lib/firebase";
 
@@ -29,9 +28,7 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(
-     localStorage.getItem(TOKEN_STORAGE_KEY),
-  );
+  const [token, setToken] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
 
   useEffect(() => {
@@ -39,15 +36,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(nextUser);
 
       if (!nextUser) {
-        localStorage.removeItem(TOKEN_STORAGE_KEY);
         setToken(null);
         setIsInitializing(false);
         return;
       }
 
-      const nextToken = await nextUser.getIdToken();
-      localStorage.setItem(TOKEN_STORAGE_KEY, nextToken);
-      setToken(nextToken);
+      try {
+        const nextToken = await nextUser.getIdToken();
+        setToken(nextToken);
+      } catch (tokenError) {
+        console.error("Failed to resolve Firebase ID token:", tokenError);
+        setToken(null);
+      }
       setIsInitializing(false);
     });
 
@@ -56,14 +56,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const result = await signInWithEmailAndPassword(auth, email, password);
-    const nextToken = await result.user.getIdToken();
-    localStorage.setItem(TOKEN_STORAGE_KEY, nextToken);
-    setToken(nextToken);
+    try {
+      const nextToken = await result.user.getIdToken();
+      setToken(nextToken);
+    } catch (tokenError) {
+      console.error("Failed to resolve Firebase ID token after login:", tokenError);
+      setToken(null);
+    }
   }, []);
 
   const logout = useCallback(async () => {
     await signOut(auth);
-    localStorage.removeItem(TOKEN_STORAGE_KEY);
     clearSelectedStoreId();
     setToken(null);
     setUser(null);
